@@ -31,8 +31,8 @@ logger = get_logger(__name__)
 
 
 def get_engine():
-    """Get or create the MemoryEngine instance."""
-    from memory_layer.core.engine import MemoryEngine
+    """Get or create an initialized MemoryEngine instance."""
+    from memory_layer.core.engine import EngineConfig, MemoryEngine
 
     db_path = os.environ.get(
         "MEMORY_LAYER_DB",
@@ -40,7 +40,11 @@ def get_engine():
     )
     # Ensure directory exists
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    return MemoryEngine(db_path=db_path)
+    config = EngineConfig(db_path=db_path)
+    engine = MemoryEngine(config=config)
+    # Initialize the engine synchronously
+    asyncio.get_event_loop().run_until_complete(engine.initialize())
+    return engine
 
 
 def run_async(coro):
@@ -160,13 +164,13 @@ def search_memories(
     """
     engine = get_engine()
 
-    categories = [MemoryCategory(category)] if category else None
+    cat = MemoryCategory(category) if category else None
 
     try:
         results = run_async(engine.search(
             query=query,
             limit=limit,
-            categories=categories,
+            category=cat,
             project=project,
             min_score=min_score,
         ))
@@ -286,22 +290,38 @@ def list_memories(
 def delete_memory(ctx: click.Context, memory_id: str, confirm: bool) -> None:
     """Archive (soft delete) a memory.
 
+    Supports partial ID matching.
+
     Example:
         mem delete abc12345 --confirm
     """
     engine = get_engine()
 
-    if not confirm:
-        if not click.confirm(f"Archive memory {memory_id}?"):
-            click.echo("Cancelled.")
-            return
-
     try:
-        success = run_async(engine.delete(memory_id))
-        if success:
-            click.echo(f"Archived memory {memory_id}")
-        else:
-            raise click.ClickException(f"Memory not found: {memory_id}")
+        # Support partial ID matching
+        full_id = memory_id
+        if len(memory_id) < 32:
+            memories = run_async(engine.list(limit=1000))
+            matches = [m for m in memories if m.id.startswith(memory_id)]
+            if len(matches) == 0:
+                raise click.ClickException(f"No memory found matching: {memory_id}")
+            elif len(matches) > 1:
+                msg = f"Ambiguous ID '{memory_id}' matches {len(matches)} memories:\n"
+                for m in matches:
+                    msg += f"  [{m.id[:16]}] {m.content[:40]}...\n"
+                msg += "Use more characters to disambiguate."
+                raise click.ClickException(msg)
+            full_id = matches[0].id
+
+        if not confirm:
+            if not click.confirm(f"Archive memory {memory_id}?"):
+                click.echo("Cancelled.")
+                return
+
+        run_async(engine.delete(full_id))
+        click.echo(f"Archived memory {memory_id}")
+    except click.ClickException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete memory: {e}")
         raise click.ClickException(str(e))
@@ -314,14 +334,31 @@ def delete_memory(ctx: click.Context, memory_id: str, confirm: bool) -> None:
 def record_outcome(ctx: click.Context, memory_id: str, result: str) -> None:
     """Record outcome feedback for a memory.
 
+    Supports partial ID matching (first 8 chars shown by other commands).
+
     Example:
         mem outcome abc12345 worked
     """
     engine = get_engine()
 
     try:
+        # Support partial ID matching
+        full_id = memory_id
+        if len(memory_id) < 32:  # Partial ID provided
+            memories = run_async(engine.list(limit=1000))
+            matches = [m for m in memories if m.id.startswith(memory_id)]
+            if len(matches) == 0:
+                raise click.ClickException(f"No memory found matching: {memory_id}")
+            elif len(matches) > 1:
+                msg = f"Ambiguous ID '{memory_id}' matches {len(matches)} memories:\n"
+                for m in matches:
+                    msg += f"  [{m.id[:16]}] {m.content[:40]}...\n"
+                msg += "Use more characters to disambiguate."
+                raise click.ClickException(msg)
+            full_id = matches[0].id
+
         success = run_async(engine.record_outcome(
-            memory_ids=[memory_id],
+            memory_ids=[full_id],
             outcome=Outcome(result),
         ))
         if success:
@@ -333,6 +370,8 @@ def record_outcome(ctx: click.Context, memory_id: str, result: str) -> None:
             click.echo(f"Recorded '{result}' for {memory_id} ({adjustment})")
         else:
             raise click.ClickException(f"Memory not found: {memory_id}")
+    except click.ClickException:
+        raise
     except Exception as e:
         logger.error(f"Failed to record outcome: {e}")
         raise click.ClickException(str(e))
@@ -380,7 +419,7 @@ def get_context(
     try:
         context_response = run_async(engine.get_context(
             project=project_name,
-            limit=limit,
+            max_memories=limit,
         ))
 
         if output_format == "silent":
@@ -594,21 +633,25 @@ def show_stats(ctx: click.Context, project: Optional[str]) -> None:
 
     try:
         stats = run_async(engine.stats(project=project))
+        storage = stats.storage_stats
 
         if ctx.obj.get("json_output"):
-            click.echo(json.dumps(stats, indent=2, default=str))
+            from dataclasses import asdict
+            click.echo(json.dumps(asdict(stats), indent=2, default=str))
         else:
             click.echo("Memory Layer Statistics")
             click.echo("=" * 40)
-            click.echo(f"Total memories: {stats.get('total_memories', 0)}")
-            click.echo(f"Active: {stats.get('active_memories', 0)}")
-            click.echo(f"Archived: {stats.get('archived_memories', 0)}")
-            click.echo(f"Average outcome score: {stats.get('avg_outcome_score', 0):.2f}")
-            click.echo(f"Total uses: {stats.get('total_uses', 0)}")
+            click.echo(f"Total memories: {storage.total_memories}")
+            click.echo(f"Active: {storage.active_memories}")
+            click.echo(f"Archived: {storage.archived_memories}")
+            click.echo(f"Average outcome score: {storage.avg_outcome_score:.2f}")
+            click.echo(f"Total uses: {storage.total_uses}")
+            click.echo(f"Indexed in retriever: {stats.indexed_memories}")
             click.echo()
-            click.echo("By Category:")
-            for cat, count in stats.get("by_category", {}).items():
-                click.echo(f"  {cat}: {count}")
+            if storage.by_category:
+                click.echo("By Category:")
+                for cat, count in storage.by_category.items():
+                    click.echo(f"  {cat}: {count}")
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         raise click.ClickException(str(e))
