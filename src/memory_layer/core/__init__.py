@@ -1,0 +1,126 @@
+"""Core memory engine components.
+
+This module contains the foundational components for Memory Layer:
+- Data models and enums
+- SQLite storage layer
+- Vector embeddings
+- Hybrid retrieval system
+- Memory engine orchestrator
+"""
+
+from __future__ import annotations
+
+from memory_layer.core.logging import get_logger, setup_logging
+from memory_layer.core.models import (
+    ContextResponse,
+    ContextResponseModel,
+    Memory,
+    MemoryCategory,
+    MemoryCreate,
+    MemoryResponse,
+    MemoryScope,
+    MemorySource,
+    MemoryUpdate,
+    Outcome,
+    OutcomeRecord,
+    SearchQuery,
+    SearchResult,
+    SearchResultResponse,
+    StatsResponse,
+    OUTCOME_SCORE_ADJUSTMENTS,
+)
+from memory_layer.core.storage import (
+    ConnectionError,
+    MemoryNotFoundError,
+    MemoryStorage,
+    StorageError,
+    StorageStats,
+)
+from memory_layer.core.embeddings import (
+    APIEmbeddingProvider,
+    APIError,
+    BatchEmbeddingResult,
+    Embedding,
+    EmbeddingCache,
+    EmbeddingConfig,
+    EmbeddingError,
+    EmbeddingProvider,
+    EmbeddingResult,
+    LocalEmbeddingProvider,
+    MockEmbeddingProvider,
+    ModelNotFoundError,
+    get_embedding_provider,
+)
+from memory_layer.core.retrieval import (
+    BM25Index,
+    CategoryRouter,
+    HybridRetriever,
+    RetrievalConfig,
+)
+from memory_layer.core.engine import (
+    EngineConfig,
+    EngineError,
+    EngineNotInitializedError,
+    EngineStats,
+    LastSearchInfo,
+    MemoryEngine,
+    create_engine,
+)
+
+__all__ = [
+    # Logging
+    "get_logger",
+    "setup_logging",
+    # Enums
+    "MemoryCategory",
+    "MemoryScope",
+    "MemorySource",
+    "Outcome",
+    "OUTCOME_SCORE_ADJUSTMENTS",
+    # Dataclasses
+    "Memory",
+    "SearchResult",
+    "ContextResponse",
+    # Pydantic models
+    "MemoryCreate",
+    "MemoryUpdate",
+    "SearchQuery",
+    "OutcomeRecord",
+    "MemoryResponse",
+    "SearchResultResponse",
+    "ContextResponseModel",
+    "StatsResponse",
+    # Storage
+    "MemoryStorage",
+    "StorageStats",
+    "StorageError",
+    "MemoryNotFoundError",
+    "ConnectionError",
+    # Embeddings
+    "EmbeddingProvider",
+    "LocalEmbeddingProvider",
+    "APIEmbeddingProvider",
+    "MockEmbeddingProvider",
+    "EmbeddingConfig",
+    "EmbeddingResult",
+    "BatchEmbeddingResult",
+    "EmbeddingCache",
+    "Embedding",
+    "EmbeddingError",
+    "ModelNotFoundError",
+    "APIError",
+    "get_embedding_provider",
+    # Retrieval
+    "BM25Index",
+    "HybridRetriever",
+    "RetrievalConfig",
+    "CategoryRouter",
+    # Engine
+    "MemoryEngine",
+    "EngineConfig",
+    "EngineStats",
+    "EngineError",
+    "EngineNotInitializedError",
+    "LastSearchInfo",
+    "create_engine",
+]

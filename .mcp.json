@@ -1,0 +1,39 @@
+{
+  "mcpServers": {
+    "memory-layer": {
+      "command": "mem",
+      "args": ["serve", "--mcp"],
+      "env": {
+        "MEMORY_LAYER_DB": "~/.memory-layer/memories.db",
+        "MEMORY_LAYER_LOG_LEVEL": "INFO"
+      },
+      "description": "Memory Layer MCP server for multi-agent memory access",
+      "tools": [
+        {
+          "name": "search_memories",
+          "description": "Search for relevant memories by query. Returns memories ranked by relevance and outcome score."
+        },
+        {
+          "name": "add_memory",
+          "description": "Store a new memory with category. Categories: architecture, convention, decision, pattern, gotcha, workaround, troubleshooting, command, preference."
+        },
+        {
+          "name": "record_outcome",
+          "description": "Record worked/failed/partial feedback for a memory. This adjusts the outcome score: worked +0.2, failed -0.3, partial +0.05."
+        },
+        {
+          "name": "get_context",
+          "description": "Get memories relevant to the current project context, formatted for injection into the conversation."
+        },
+        {
+          "name": "list_memories",
+          "description": "List memories with optional filters by category, project, or minimum score."
+        },
+        {
+          "name": "get_stats",
+          "description": "Get memory statistics including total count, category distribution, and average outcome scores."
+        }
+      ]
+    }
+  }
+}
