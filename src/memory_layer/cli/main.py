@@ -206,13 +206,30 @@ def search_memories(
 def show_memory(ctx: click.Context, memory_id: str) -> None:
     """Show details of a specific memory.
 
+    Supports partial ID matching.
+
     Example:
         mem show abc12345
     """
     engine = get_engine()
 
     try:
-        memory = run_async(engine.get(memory_id))
+        # Support partial ID matching
+        full_id = memory_id
+        if len(memory_id) < 32:
+            memories = run_async(engine.list(limit=1000))
+            matches = [m for m in memories if m.id.startswith(memory_id)]
+            if len(matches) == 0:
+                raise click.ClickException(f"No memory found matching: {memory_id}")
+            elif len(matches) > 1:
+                msg = f"Ambiguous ID '{memory_id}' matches {len(matches)} memories:\n"
+                for m in matches:
+                    msg += f"  [{m.id[:16]}] {m.content[:40]}...\n"
+                msg += "Use more characters to disambiguate."
+                raise click.ClickException(msg)
+            full_id = matches[0].id
+
+        memory = run_async(engine.get(full_id))
         if memory is None:
             raise click.ClickException(f"Memory not found: {memory_id}")
 
