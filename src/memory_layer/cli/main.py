@@ -786,6 +786,365 @@ def export_memories(
 
 
 # =============================================================================
+# Plugin Installation
+# =============================================================================
+
+
+SETTINGS_JSON = """{
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "memory-layer"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mem context --project \\"$PWD\\" --limit 10 --format brief"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mem session end --summarize 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mem track-file \\"$TOOL_INPUT_FILE_PATH\\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
+"""
+
+PLUGIN_JSON = """{
+  "name": "memory-layer",
+  "description": "Persistent memory with outcome-based learning for AI coding agents.",
+  "version": "2.0.0",
+  "author": "memory-layer-contributors",
+  "license": "MIT",
+  "capabilities": {
+    "hooks": true,
+    "commands": true,
+    "skills": true,
+    "mcp": true
+  }
+}
+"""
+
+MCP_JSON = """{
+  "mcpServers": {
+    "memory-layer": {
+      "command": "mem",
+      "args": ["serve", "--mcp"],
+      "env": {
+        "MEMORY_LAYER_DB": "~/.memory-layer/memories.db"
+      }
+    }
+  }
+}
+"""
+
+REMEMBER_CMD = """---
+description: Store a memory for future reference
+allowed-tools: Bash
+---
+
+Store information in Memory Layer for future sessions.
+
+## Usage
+
+`/remember <content>` - Store with auto-detected category
+`/remember category:<cat> <content>` - Store with specific category
+
+## Categories
+
+architecture, convention, decision, pattern, gotcha, workaround, troubleshooting, command, preference
+
+## Examples
+
+- `/remember Always use async/await in this project`
+- `/remember category:gotcha Watch out for N+1 queries`
+
+## Action
+
+```bash
+mem add "<content>" -c <category>
+```
+
+Confirm storage with the memory ID shown.
+"""
+
+RECALL_CMD = """---
+description: Search memories for relevant information
+allowed-tools: Bash
+---
+
+Search Memory Layer for relevant past knowledge.
+
+## Usage
+
+`/recall <query>` - Search memories
+`/recall <query> limit:N` - Limit results
+
+## Action
+
+```bash
+mem search "<query>" --limit 5 --format context
+```
+
+Present results naturally, noting which memories have high confidence (outcome score > 0.3).
+"""
+
+OUTCOME_CMD = """---
+description: Record feedback on whether a memory helped
+allowed-tools: Bash
+---
+
+Record outcome feedback to improve memory rankings.
+
+## Usage
+
+`/outcome <id> worked` - Memory was helpful (+0.2)
+`/outcome <id> failed` - Memory was wrong (-0.3)
+`/outcome <id> partial` - Partially helpful (+0.05)
+
+## Action
+
+```bash
+mem outcome <id> <result>
+```
+
+Confirm the score adjustment.
+"""
+
+MEMORIES_CMD = """---
+description: List stored memories
+allowed-tools: Bash
+---
+
+List all memories in Memory Layer.
+
+## Usage
+
+`/memories` - List all
+`/memories -c <category>` - Filter by category
+
+## Action
+
+```bash
+mem list --limit 20
+```
+"""
+
+FORGET_CMD = """---
+description: Archive a memory
+allowed-tools: Bash
+---
+
+Archive (soft-delete) a memory that's no longer relevant.
+
+## Usage
+
+`/forget <id>`
+
+## Action
+
+```bash
+mem delete <id> --confirm
+```
+
+Confirm archival.
+"""
+
+MEMORY_CONTEXT_CMD = """---
+description: Get project memory context
+allowed-tools: Bash
+---
+
+Get formatted memory context for the current project.
+
+## Usage
+
+`/memory-context`
+
+## Action
+
+```bash
+mem context --format markdown
+```
+"""
+
+MEMORY_RETRIEVAL_SKILL = """---
+description: Automatically retrieve relevant memories when user asks about past decisions
+allowed-tools: Bash, Read
+user-invocable: false
+---
+
+# Memory Retrieval Skill
+
+Activate when user asks about past decisions, conventions, or patterns:
+- "what did we decide about..."
+- "what's our convention for..."
+- "how do we handle..."
+- "last time we..."
+
+## Action
+
+Search memories and incorporate into response:
+
+```bash
+mem search "<keywords>" --limit 5 --format context
+```
+
+Cite memory IDs for transparency. Suggest `/outcome <id> worked` if helpful.
+"""
+
+OUTCOME_FEEDBACK_SKILL = """---
+description: Detect natural feedback signals and prompt for outcome recording
+allowed-tools: Bash
+user-invocable: false
+---
+
+# Outcome Feedback Skill
+
+Detect when user signals success or failure:
+
+**Positive**: "thanks!", "that worked!", "perfect!", "solved it"
+**Negative**: "still not working", "didn't help", "same error"
+**Partial**: "kind of", "partially", "almost"
+
+## Action
+
+When detected, offer to record feedback:
+
+```bash
+mem outcome <last-used-memory-id> worked|failed|partial
+```
+
+Be non-intrusive - only prompt once per memory per session.
+"""
+
+CODING_PATTERNS_SKILL = """---
+description: Surface relevant coding patterns when implementing new features
+allowed-tools: Bash, Read
+user-invocable: false
+---
+
+# Coding Patterns Skill
+
+Activate when user is creating new code:
+- "create a new..."
+- "implement..."
+- "write a..."
+- "add a new..."
+
+## Action
+
+Search for relevant patterns:
+
+```bash
+mem search "<feature-type> pattern" -c pattern --limit 3
+```
+
+Incorporate patterns into implementation suggestions.
+"""
+
+
+@cli.command("install-plugin")
+@click.option("--force", "-f", is_flag=True, help="Overwrite existing files")
+@click.pass_context
+def install_plugin(ctx: click.Context, force: bool) -> None:
+    """Install Claude Code plugin files in the current directory.
+
+    Creates:
+    - .claude/settings.json (hooks configuration)
+    - .claude/commands/ (slash commands)
+    - .claude/skills/ (agent skills)
+    - .claude-plugin/plugin.json (plugin manifest)
+    - .mcp.json (MCP server configuration)
+
+    Example:
+        cd your-project
+        mem install-plugin
+        claude
+    """
+    cwd = Path.cwd()
+
+    # Create directories
+    claude_dir = cwd / ".claude"
+    commands_dir = claude_dir / "commands"
+    skills_dir = claude_dir / "skills"
+    plugin_dir = cwd / ".claude-plugin"
+
+    dirs_to_create = [
+        claude_dir,
+        commands_dir,
+        skills_dir / "memory-retrieval",
+        skills_dir / "outcome-feedback",
+        skills_dir / "coding-patterns",
+        plugin_dir,
+    ]
+
+    for d in dirs_to_create:
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Files to create
+    files = [
+        (claude_dir / "settings.json", SETTINGS_JSON),
+        (plugin_dir / "plugin.json", PLUGIN_JSON),
+        (cwd / ".mcp.json", MCP_JSON),
+        (commands_dir / "remember.md", REMEMBER_CMD),
+        (commands_dir / "recall.md", RECALL_CMD),
+        (commands_dir / "outcome.md", OUTCOME_CMD),
+        (commands_dir / "memories.md", MEMORIES_CMD),
+        (commands_dir / "forget.md", FORGET_CMD),
+        (commands_dir / "memory-context.md", MEMORY_CONTEXT_CMD),
+        (skills_dir / "memory-retrieval" / "SKILL.md", MEMORY_RETRIEVAL_SKILL),
+        (skills_dir / "outcome-feedback" / "SKILL.md", OUTCOME_FEEDBACK_SKILL),
+        (skills_dir / "coding-patterns" / "SKILL.md", CODING_PATTERNS_SKILL),
+    ]
+
+    created = 0
+    skipped = 0
+
+    for filepath, content in files:
+        if filepath.exists() and not force:
+            skipped += 1
+            click.echo(f"  Skipped (exists): {filepath.relative_to(cwd)}")
+        else:
+            filepath.write_text(content.strip() + "\n")
+            created += 1
+            click.echo(f"  Created: {filepath.relative_to(cwd)}")
+
+    click.echo()
+    click.echo(f"Plugin installed: {created} files created, {skipped} skipped")
+
+    if skipped > 0:
+        click.echo("Use --force to overwrite existing files")
+
+    click.echo()
+    click.echo("Next steps:")
+    click.echo("  1. Start Claude Code: claude")
+    click.echo("  2. Try: /remember Always use async/await")
+    click.echo("  3. Try: /recall async")
+
+
+# =============================================================================
 # Entry Point
 # =============================================================================
 

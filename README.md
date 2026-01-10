@@ -112,6 +112,52 @@ Configure in your MCP client:
 }
 ```
 
+### Claude Code Integration
+
+Memory Layer integrates with Claude Code via hooks and skills.
+
+**Installation:**
+
+```bash
+# Install the package
+pip install memory-layer
+
+# Go to your project directory
+cd your-project
+
+# Install Claude Code plugin
+mem install-plugin
+
+# Start Claude Code
+claude
+```
+
+The `mem install-plugin` command creates:
+- `.claude/settings.json` - Hooks for SessionStart, SessionEnd, PostToolUse
+- `.claude/commands/` - Slash commands (/remember, /recall, /outcome, etc.)
+- `.claude/skills/` - Agent skills (memory-retrieval, outcome-feedback, coding-patterns)
+- `.claude-plugin/plugin.json` - Plugin manifest
+- `.mcp.json` - MCP server configuration
+
+**What happens automatically:**
+
+- **SessionStart hook**: Loads relevant memories when you start Claude Code
+- **PostToolUse hook**: Tracks files you edit for context
+- **SessionEnd hook**: Generates session summary when you exit
+- **Skills**: Auto-retrieval when you ask "what's our convention...", feedback detection when you say "thanks, that worked!"
+
+**Slash commands in Claude Code:**
+
+```
+/remember <content>              # Store a memory
+/remember category:gotcha <content>  # Store with category
+/recall <query>                  # Search memories
+/memories                        # List all memories
+/outcome <id> worked|failed      # Record feedback
+/forget <id>                     # Archive a memory
+/memory-context                  # Get project context
+```
+
 ## Memory Categories
 
 | Category | Use For | Example |
