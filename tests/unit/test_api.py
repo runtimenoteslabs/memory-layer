@@ -17,6 +17,7 @@ from memory_layer.core.models import (
     MemorySource,
     Outcome,
 )
+from memory_layer.core.storage import MemoryNotFoundError
 from memory_layer.server.api import (
     APIConfig,
     AppState,
@@ -427,16 +428,25 @@ class TestStatsEndpoint:
 
     def test_get_stats(self, test_client, mock_engine):
         """Test get stats endpoint."""
-        mock_engine.stats.return_value = {
-            "total_memories": 100,
-            "active_memories": 90,
-            "archived_memories": 10,
-            "by_category": {"general": 50, "pattern": 30, "convention": 20},
-            "by_scope": {"project": 60, "global": 40},
-            "by_source": {"explicit": 80, "extracted": 20},
-            "avg_outcome_score": 0.15,
-            "total_uses": 500,
-        }
+        from memory_layer.core.storage import StorageStats
+        from memory_layer.core.engine import EngineStats
+
+        storage_stats = StorageStats(
+            total_memories=100,
+            active_memories=90,
+            archived_memories=10,
+            by_category={"general": 50, "pattern": 30, "convention": 20},
+            by_scope={"project": 60, "global": 40},
+            by_source={"explicit": 80, "extracted": 20},
+            avg_outcome_score=0.15,
+            total_uses=500,
+        )
+        mock_engine.stats.return_value = EngineStats(
+            storage_stats=storage_stats,
+            indexed_memories=100,
+            indexed_with_embeddings=100,
+            last_search_result_count=0,
+        )
 
         response = test_client.get("/stats")
         assert response.status_code == 200
@@ -447,16 +457,25 @@ class TestStatsEndpoint:
 
     def test_get_stats_with_project(self, test_client, mock_engine):
         """Test get stats with project filter."""
-        mock_engine.stats.return_value = {
-            "total_memories": 20,
-            "active_memories": 18,
-            "archived_memories": 2,
-            "by_category": {},
-            "by_scope": {},
-            "by_source": {},
-            "avg_outcome_score": 0.0,
-            "total_uses": 0,
-        }
+        from memory_layer.core.storage import StorageStats
+        from memory_layer.core.engine import EngineStats
+
+        storage_stats = StorageStats(
+            total_memories=20,
+            active_memories=18,
+            archived_memories=2,
+            by_category={},
+            by_scope={},
+            by_source={},
+            avg_outcome_score=0.0,
+            total_uses=0,
+        )
+        mock_engine.stats.return_value = EngineStats(
+            storage_stats=storage_stats,
+            indexed_memories=20,
+            indexed_with_embeddings=20,
+            last_search_result_count=0,
+        )
 
         response = test_client.get("/stats?project=my-project")
         assert response.status_code == 200
@@ -538,7 +557,7 @@ class TestGetMemory:
 
     def test_get_memory_not_found(self, test_client, mock_engine):
         """Test getting non-existent memory."""
-        mock_engine.get.return_value = None
+        mock_engine.get.side_effect = MemoryNotFoundError("nonexistent-id")
 
         response = test_client.get("/memories/nonexistent-id")
 
@@ -569,7 +588,8 @@ class TestUpdateMemory:
         """Test partial memory update."""
         memory = create_test_memory()
         mock_engine.get.return_value = memory
-        mock_engine.update.return_value = memory
+        updated_memory = create_test_memory(importance=0.9)
+        mock_engine.update.return_value = updated_memory
 
         response = test_client.patch(
             "/memories/test-memory-id",
@@ -577,13 +597,13 @@ class TestUpdateMemory:
         )
 
         assert response.status_code == 200
-        # Check that only importance was updated
-        updated = mock_engine.update.call_args[0][0]
-        assert updated.importance == 0.9
+        # Check that update was called with the right kwargs
+        call_kwargs = mock_engine.update.call_args.kwargs
+        assert call_kwargs["importance"] == 0.9
 
     def test_update_memory_not_found(self, test_client, mock_engine):
         """Test updating non-existent memory."""
-        mock_engine.get.return_value = None
+        mock_engine.update.side_effect = MemoryNotFoundError("nonexistent-id")
 
         response = test_client.patch(
             "/memories/nonexistent-id",
@@ -607,7 +627,7 @@ class TestDeleteMemory:
 
     def test_delete_memory_not_found(self, test_client, mock_engine):
         """Test deleting non-existent memory."""
-        mock_engine.delete.return_value = False
+        mock_engine.delete.side_effect = MemoryNotFoundError("nonexistent-id")
 
         response = test_client.delete("/memories/nonexistent-id")
 
@@ -702,7 +722,8 @@ class TestSearchMemories:
         call_kwargs = mock_engine.search.call_args.kwargs
         assert call_kwargs["query"] == "authentication"
         assert call_kwargs["limit"] == 20
-        assert len(call_kwargs["categories"]) == 2
+        # API now passes first category to engine (engine expects singular category)
+        assert call_kwargs["category"] == MemoryCategory.PATTERN
 
 
 # =============================================================================
@@ -820,9 +841,10 @@ class TestGetContext:
         response = test_client.get("/context?project=my-project&limit=5&format=brief")
 
         assert response.status_code == 200
+        # API passes limit as max_memories to engine
         mock_engine.get_context.assert_called_once_with(
             project="my-project",
-            limit=5,
+            max_memories=5,
         )
 
 
@@ -893,16 +915,25 @@ class TestAuthentication:
 
     def test_auth_required_valid_key(self, auth_test_client, mock_engine):
         """Test auth required with valid key."""
-        mock_engine.stats.return_value = {
-            "total_memories": 0,
-            "active_memories": 0,
-            "archived_memories": 0,
-            "by_category": {},
-            "by_scope": {},
-            "by_source": {},
-            "avg_outcome_score": 0.0,
-            "total_uses": 0,
-        }
+        from memory_layer.core.storage import StorageStats
+        from memory_layer.core.engine import EngineStats
+
+        storage_stats = StorageStats(
+            total_memories=0,
+            active_memories=0,
+            archived_memories=0,
+            by_category={},
+            by_scope={},
+            by_source={},
+            avg_outcome_score=0.0,
+            total_uses=0,
+        )
+        mock_engine.stats.return_value = EngineStats(
+            storage_stats=storage_stats,
+            indexed_memories=0,
+            indexed_with_embeddings=0,
+            last_search_result_count=0,
+        )
 
         response = auth_test_client.get(
             "/stats",
@@ -969,7 +1000,7 @@ class TestErrorHandling:
 
     def test_not_found_error(self, test_client, mock_engine):
         """Test not found error response."""
-        mock_engine.get.return_value = None
+        mock_engine.get.side_effect = MemoryNotFoundError("nonexistent")
 
         response = test_client.get("/memories/nonexistent")
         assert response.status_code == 404

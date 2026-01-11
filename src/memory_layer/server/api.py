@@ -426,7 +426,11 @@ async def validation_exception_handler(request: Request, exc: Exception):
 
 
 async def general_exception_handler(request: Request, exc: Exception):
-    """Handle general errors."""
+    """Handle general errors (not HTTPException)."""
+    # Let HTTPException be handled by FastAPI's default handler
+    if isinstance(exc, HTTPException):
+        raise exc
+
     logger.error(f"Unhandled error: {exc}")
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -488,7 +492,7 @@ def create_app(
 
     # Add exception handlers
     app.add_exception_handler(ValueError, validation_exception_handler)
-    app.add_exception_handler(Exception, general_exception_handler)
+    # Note: Don't add general Exception handler as it catches HTTPException too
 
     # Register routes
     app.include_router(router)
@@ -523,7 +527,18 @@ async def get_stats(
 ):
     """Get memory statistics."""
     stats = await engine.stats(project=project)
-    return StatsResponse(**stats)
+    # StatsResponse fields come from storage_stats
+    storage = stats.storage_stats
+    return StatsResponse(
+        total_memories=storage.total_memories,
+        active_memories=storage.active_memories,
+        archived_memories=storage.archived_memories,
+        by_category=storage.by_category,
+        by_scope=storage.by_scope,
+        by_source=storage.by_source,
+        avg_outcome_score=storage.avg_outcome_score,
+        total_uses=storage.total_uses,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -562,8 +577,11 @@ async def get_memory(
     _: Optional[str] = Depends(verify_api_key),
 ):
     """Get a memory by ID."""
-    memory = await engine.get(memory_id)
-    if memory is None:
+    from memory_layer.core.engine import MemoryNotFoundError
+
+    try:
+        memory = await engine.get(memory_id)
+    except MemoryNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Memory not found: {memory_id}",
@@ -579,24 +597,22 @@ async def update_memory(
     _: Optional[str] = Depends(verify_api_key),
 ):
     """Update a memory."""
-    memory = await engine.get(memory_id)
-    if memory is None:
+    from memory_layer.core.engine import MemoryNotFoundError
+
+    try:
+        # Update memory with provided fields
+        updated = await engine.update(
+            memory_id=memory_id,
+            content=request.content,
+            category=request.category,
+            tags=request.tags,
+            importance=request.importance,
+        )
+    except MemoryNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Memory not found: {memory_id}",
         )
-
-    # Apply updates
-    if request.content is not None:
-        memory.content = request.content
-    if request.category is not None:
-        memory.category = request.category
-    if request.tags is not None:
-        memory.tags = request.tags
-    if request.importance is not None:
-        memory.importance = request.importance
-
-    updated = await engine.update(memory)
     return MemoryResponse.from_memory(updated)
 
 
@@ -611,8 +627,11 @@ async def delete_memory(
     _: Optional[str] = Depends(verify_api_key),
 ):
     """Archive (soft delete) a memory."""
-    success = await engine.delete(memory_id)
-    if not success:
+    from memory_layer.core.engine import MemoryNotFoundError
+
+    try:
+        await engine.delete(memory_id)
+    except MemoryNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Memory not found: {memory_id}",
@@ -654,10 +673,12 @@ async def search_memories(
     _: Optional[str] = Depends(verify_api_key),
 ):
     """Search memories by query."""
+    # Engine only supports single category, use first if list provided
+    category = request.categories[0] if request.categories else None
     results = await engine.search(
         query=request.query,
         limit=request.limit,
-        categories=request.categories,
+        category=category,
         project=request.project,
         min_score=request.min_score,
     )
@@ -727,7 +748,7 @@ async def get_context(
     _: Optional[str] = Depends(verify_api_key),
 ):
     """Get project context."""
-    context = await engine.get_context(project=project, limit=limit)
+    context = await engine.get_context(project=project, max_memories=limit)
 
     from memory_layer.plugin import ContextFormatter
 

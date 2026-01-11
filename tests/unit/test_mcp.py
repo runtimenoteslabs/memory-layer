@@ -26,6 +26,7 @@ from memory_layer.core.models import (
     Outcome,
     SearchResult,
 )
+from memory_layer.core.storage import MemoryNotFoundError
 from memory_layer.server.mcp import (
     MCPError,
     MCPErrorCode,
@@ -1008,7 +1009,7 @@ class TestDeleteMemoryTool:
     @pytest.mark.asyncio
     async def test_delete_not_found(self, mcp_server, mock_engine):
         """Test deleting non-existent memory."""
-        mock_engine.delete = AsyncMock(return_value=False)
+        mock_engine.delete = AsyncMock(side_effect=MemoryNotFoundError("nonexistent"))
 
         request = MCPRequest(
             jsonrpc="2.0",

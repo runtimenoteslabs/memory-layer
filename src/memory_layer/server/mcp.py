@@ -710,11 +710,12 @@ class MCPServer:
             if cat_list:
                 categories = [MemoryCategory(c) for c in cat_list]
 
-        # Execute search
+        # Execute search - engine only supports single category
+        category = categories[0] if categories else None
         results = await engine.search(
             query=query,
             limit=limit,
-            categories=categories,
+            category=category,
             project=project,
             min_score=min_score,
         )
@@ -811,7 +812,7 @@ class MCPServer:
         format_style = args.get("format", "markdown")
 
         # Get context
-        context = await engine.get_context(project=project, limit=limit)
+        context = await engine.get_context(project=project, max_memories=limit)
 
         # Format output
         from memory_layer.plugin import ContextFormatter
@@ -856,21 +857,18 @@ class MCPServer:
         )
         tags = validate_list(args.get("tags"), "tags", str, max_items=20)
 
-        # Get existing memory
-        memory = await engine.get(memory_id)
-        if memory is None:
+        # Check memory exists
+        existing = await engine.get(memory_id)
+        if existing is None:
             raise ValueError(f"Memory not found: {memory_id}")
 
-        # Update fields
-        if content is not None:
-            memory.content = content
-        if category is not None:
-            memory.category = category
-        if tags is not None:
-            memory.tags = tags
-
-        # Save update
-        updated = await engine.update(memory)
+        # Update memory with provided fields
+        updated = await engine.update(
+            memory_id=memory_id,
+            content=content,
+            category=category,
+            tags=tags,
+        )
 
         return {
             "id": updated.id,
@@ -883,15 +881,17 @@ class MCPServer:
         self, args: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle delete_memory tool."""
+        from memory_layer.core.engine import MemoryNotFoundError
+
         engine = self._ensure_engine()
 
         # Validate inputs
         memory_id = validate_string(args.get("id"), "id", min_length=1)
 
         # Delete (archive) memory
-        success = await engine.delete(memory_id)
-
-        if not success:
+        try:
+            await engine.delete(memory_id)
+        except MemoryNotFoundError:
             raise ValueError(f"Memory not found: {memory_id}")
 
         return {
