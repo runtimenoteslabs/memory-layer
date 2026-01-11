@@ -2,6 +2,8 @@
 
 Persistent memory for AI coding agents with outcome-based learning.
 
+> **New to Memory Layer?** See the [User Guide](USER_GUIDE.md) for a simple introduction to using Memory Layer with Claude Code.
+
 ## What It Does
 
 Memory Layer stores knowledge from your coding sessions and learns which memories actually help. When advice works, it gets boosted (+0.2). When it fails, it gets penalized (-0.3). Over time, good memories rise to the top.
@@ -15,7 +17,7 @@ pip install memory-layer
 For development:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/memory-layer.git
+git clone https://github.com/runtimenoteslabs/memory-layer.git
 cd memory-layer
 pip install -e ".[dev]"
 ```
@@ -114,7 +116,7 @@ Configure in your MCP client:
 
 ### Claude Code Integration
 
-Memory Layer integrates with Claude Code via hooks and skills.
+Memory Layer integrates with Claude Code via hooks and skills. For a beginner-friendly walkthrough, see the [User Guide](USER_GUIDE.md).
 
 **Installation:**
 
