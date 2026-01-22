@@ -15,7 +15,7 @@ class TestProjectSetup:
         """Test that the main package can be imported."""
         import memory_layer
 
-        assert memory_layer.__version__ == "0.1.0"
+        assert memory_layer.__version__ == "2.0.0"
         assert memory_layer.__author__ == "Memory Layer Team"
 
     def test_core_import(self) -> None:

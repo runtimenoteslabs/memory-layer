@@ -58,6 +58,7 @@ def run_async(coro):
 
 
 @click.group()
+@click.version_option(version="2.0.0", prog_name="Memory Layer")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.option("--json-output", is_flag=True, help="Output in JSON format")
 @click.pass_context
@@ -672,6 +673,92 @@ def show_stats(ctx: click.Context, project: Optional[str]) -> None:
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         raise click.ClickException(str(e))
+
+
+@cli.command("check")
+@click.option("--fix", is_flag=True, help="Attempt to fix issues")
+@click.pass_context
+def check_health(ctx: click.Context, fix: bool) -> None:
+    """Check Memory Layer health and configuration.
+
+    Verifies database, embeddings, and configuration are working correctly.
+
+    Example:
+        mem check
+        mem check --fix
+    """
+    issues = []
+    fixes_applied = []
+
+    click.echo("Memory Layer Health Check")
+    click.echo("=" * 40)
+
+    # Check 1: Database location and access
+    db_path = os.environ.get(
+        "MEMORY_LAYER_DB",
+        str(Path.home() / ".memory-layer" / "memories.db")
+    )
+    db_exists = Path(db_path).exists()
+    db_dir_exists = Path(db_path).parent.exists()
+
+    if db_dir_exists:
+        click.echo(f"[OK] Database directory: {Path(db_path).parent}")
+    else:
+        if fix:
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            fixes_applied.append("Created database directory")
+            click.echo(f"[FIXED] Created database directory: {Path(db_path).parent}")
+        else:
+            issues.append(f"Database directory missing: {Path(db_path).parent}")
+            click.echo(f"[ISSUE] Database directory missing: {Path(db_path).parent}")
+
+    if db_exists:
+        click.echo(f"[OK] Database file: {db_path}")
+    else:
+        click.echo(f"[INFO] Database file will be created on first use: {db_path}")
+
+    # Check 2: Engine initialization
+    try:
+        engine = get_engine()
+        click.echo("[OK] Engine initialization")
+
+        # Check 3: Memory count
+        stats = run_async(engine.stats())
+        total = stats.storage_stats.total_memories
+        click.echo(f"[OK] Memory count: {total} memories")
+
+        # Check 4: Embedding provider
+        if hasattr(engine, '_retriever') and engine._retriever:
+            click.echo("[OK] Retriever initialized")
+        else:
+            click.echo("[INFO] Retriever not yet initialized (will init on first search)")
+
+    except Exception as e:
+        issues.append(f"Engine initialization failed: {e}")
+        click.echo(f"[ISSUE] Engine initialization failed: {e}")
+
+    # Check 5: Environment variables
+    click.echo()
+    click.echo("Configuration:")
+    click.echo(f"  MEMORY_LAYER_DB: {os.environ.get('MEMORY_LAYER_DB', '(default)')}")
+    click.echo(f"  ANTHROPIC_API_KEY: {'set' if os.environ.get('ANTHROPIC_API_KEY') else 'not set'}")
+
+    # Summary
+    click.echo()
+    click.echo("-" * 40)
+    if issues:
+        click.echo(f"Issues found: {len(issues)}")
+        for issue in issues:
+            click.echo(f"  - {issue}")
+        if not fix:
+            click.echo("\nRun 'mem check --fix' to attempt automatic fixes.")
+    else:
+        click.echo("All checks passed!")
+
+    if fixes_applied:
+        click.echo(f"\nFixes applied: {len(fixes_applied)}")
+        for f in fixes_applied:
+            click.echo(f"  - {f}")
 
 
 # =============================================================================

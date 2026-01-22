@@ -20,8 +20,8 @@ Over time, it learns which memories are actually useful based on your feedback.
 ## Setup (One Time)
 
 ```bash
-# 1. Install
-pip install memory-layer
+# 1. Install from GitHub
+pip install git+https://github.com/runtimenoteslabs/memory-layer.git
 
 # 2. Go to your project
 cd your-project
@@ -185,16 +185,22 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
 
 1. **Storage**: Memories are stored locally in a SQLite database (`~/.memory-layer/memories.db`)
 
-2. **Retrieval**: When you ask questions, relevant memories are automatically searched using semantic similarity
+2. **Retrieval**: When you ask questions, relevant memories are automatically searched using a hybrid approach:
+   - Semantic similarity (what you're asking about)
+   - Outcome scores (what actually helped before)
+   - Recency (recent memories weighted higher)
+   - Usage frequency (popular memories rise)
 
-3. **Learning**: Each memory has a score starting at 0.0
+3. **Smart Boosting**: When you ask about errors, troubleshooting memories are automatically prioritized. Ask "what's our convention...", and convention memories get boosted. The system detects your intent.
+
+4. **Learning**: Each memory has a score starting at 0.0
    - "worked" → +0.2 (max 1.0)
    - "failed" → -0.3 (min -1.0)
    - "partial" → +0.05
 
-   Higher-scored memories appear first in search results
+   Higher-scored memories appear first in search results. Over time, good advice rises and bad advice sinks.
 
-4. **Privacy**: Everything stays on your machine. No data is sent anywhere.
+5. **Privacy**: Everything stays on your machine. No data is sent anywhere.
 
 ---
 
@@ -204,9 +210,9 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
 
 Make sure memory-layer is installed and your PATH includes pip's bin directory:
 ```bash
-pip install memory-layer
+pip install git+https://github.com/runtimenoteslabs/memory-layer.git
 # or
-python -m pip install memory-layer
+python -m pip install git+https://github.com/runtimenoteslabs/memory-layer.git
 ```
 
 ### Memories not loading in Claude Code

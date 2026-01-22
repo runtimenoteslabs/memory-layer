@@ -29,6 +29,8 @@ from memory_layer.core.models import (
     MemorySource,
     SearchResult,
 )
+from memory_layer.core.engine import EngineStats
+from memory_layer.core.storage import StorageStats
 
 
 # =============================================================================
@@ -92,6 +94,9 @@ def mock_engine(sample_memory, sample_memories):
     """Create a mock engine with common methods."""
     engine = MagicMock()
 
+    # Include sample_memory in list so partial ID matching works
+    all_memories = [sample_memory] + sample_memories
+
     # Configure async methods
     engine.add = AsyncMock(return_value=sample_memory)
     engine.get = AsyncMock(return_value=sample_memory)
@@ -99,7 +104,7 @@ def mock_engine(sample_memory, sample_memories):
         SearchResult(memory=m, score=0.9 - i * 0.1)
         for i, m in enumerate(sample_memories)
     ])
-    engine.list = AsyncMock(return_value=sample_memories)
+    engine.list = AsyncMock(return_value=all_memories)
     engine.delete = AsyncMock(return_value=True)
     engine.record_outcome = AsyncMock(return_value=True)
     engine.get_context = AsyncMock(return_value=ContextResponse(
@@ -108,18 +113,31 @@ def mock_engine(sample_memory, sample_memories):
         total_count=3,
         included_count=3,
     ))
-    engine.stats = AsyncMock(return_value={
-        "total_memories": 10,
-        "active_memories": 8,
-        "archived_memories": 2,
-        "avg_outcome_score": 0.35,
-        "total_uses": 25,
-        "by_category": {
+
+    # Create proper stats structure using actual dataclasses
+    storage_stats = StorageStats(
+        total_memories=10,
+        active_memories=8,
+        archived_memories=2,
+        avg_outcome_score=0.35,
+        total_uses=25,
+        by_category={
             "convention": 3,
             "architecture": 2,
             "gotcha": 5,
         },
-    })
+        by_scope={"global": 5, "project": 5},
+        by_source={"explicit": 8, "extracted": 2},
+    )
+
+    stats_result = EngineStats(
+        storage_stats=storage_stats,
+        indexed_memories=8,
+        indexed_with_embeddings=8,
+        last_search_result_count=0,
+    )
+
+    engine.stats = AsyncMock(return_value=stats_result)
 
     return engine
 
@@ -262,7 +280,7 @@ class TestSearchCommand:
 
         assert result.exit_code == 0
         call_kwargs = mock_engine.search.call_args[1]
-        assert call_kwargs["categories"] == [MemoryCategory.CONVENTION]
+        assert call_kwargs["category"] == MemoryCategory.CONVENTION
 
     def test_search_with_project_filter(self, runner, mock_engine):
         """Test search with project filter."""
@@ -346,11 +364,12 @@ class TestShowCommand:
     def test_show_not_found(self, runner, mock_engine):
         """Test showing non-existent memory."""
         mock_engine.get = AsyncMock(return_value=None)
+        mock_engine.list = AsyncMock(return_value=[])  # No memories to match
         with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["show", "nonexistent"])
 
         assert result.exit_code != 0
-        assert "not found" in result.output.lower()
+        assert "no memory found" in result.output.lower()
 
 
 # =============================================================================
@@ -460,11 +479,12 @@ class TestDeleteCommand:
     def test_delete_not_found(self, runner, mock_engine):
         """Test deleting non-existent memory."""
         mock_engine.delete = AsyncMock(return_value=False)
+        mock_engine.list = AsyncMock(return_value=[])  # No memories to match
         with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["delete", "nonexistent", "--confirm"])
 
         assert result.exit_code != 0
-        assert "not found" in result.output.lower()
+        assert "no memory found" in result.output.lower()
 
 
 # =============================================================================
@@ -505,11 +525,12 @@ class TestOutcomeCommand:
     def test_outcome_not_found(self, runner, mock_engine):
         """Test outcome for non-existent memory."""
         mock_engine.record_outcome = AsyncMock(return_value=False)
+        mock_engine.list = AsyncMock(return_value=[])  # No memories to match
         with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["outcome", "nonexistent", "worked"])
 
         assert result.exit_code != 0
-        assert "not found" in result.output.lower()
+        assert "no memory found" in result.output.lower()
 
     def test_outcome_invalid_result(self, runner, mock_engine):
         """Test outcome with invalid result type."""
@@ -550,7 +571,7 @@ class TestContextCommand:
 
         assert result.exit_code == 0
         call_kwargs = mock_engine.get_context.call_args[1]
-        assert call_kwargs["limit"] == 5
+        assert call_kwargs["max_memories"] == 5
 
     def test_context_inject_flag(self, runner, mock_engine):
         """Test context with inject flag."""
@@ -757,8 +778,10 @@ class TestStatsCommand:
 
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert "total_memories" in data
-        assert "by_category" in data
+        # Stats structure has storage_stats nested
+        assert "storage_stats" in data
+        assert "total_memories" in data["storage_stats"]
+        assert "by_category" in data["storage_stats"]
 
 
 # =============================================================================
