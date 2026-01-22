@@ -23,6 +23,8 @@ cd memory-layer
 pip install -e ".[dev]"
 ```
 
+**Note:** First run downloads an embedding model (~100MB) for semantic search. This happens once and is cached. Subsequent operations are fast (<100ms).
+
 ## Quick Start
 
 ### Python SDK

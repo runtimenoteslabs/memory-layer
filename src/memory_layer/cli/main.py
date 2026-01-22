@@ -52,6 +52,54 @@ def run_async(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
+def format_error(error: Exception, verbose: bool = False) -> str:
+    """Convert exception to user-friendly error message.
+
+    Args:
+        error: The exception to format
+        verbose: If True, include technical details
+
+    Returns:
+        User-friendly error message
+    """
+    error_str = str(error)
+
+    # Handle Pydantic validation errors
+    if "validation error" in error_str.lower():
+        # Extract the key issue
+        if "content" in error_str.lower() and "at least 1 character" in error_str.lower():
+            return "Content cannot be empty."
+        if "content" in error_str.lower() and "string_too_short" in error_str.lower():
+            return "Content cannot be empty."
+        if "importance" in error_str.lower():
+            return "Importance must be a number between 0.0 and 1.0."
+        if "category" in error_str.lower():
+            return "Invalid category. Use: architecture, convention, decision, pattern, gotcha, workaround, troubleshooting, command, preference, general."
+        # Generic validation error
+        if verbose:
+            return error_str
+        return "Invalid input. Use -v flag for details."
+
+    # Handle common errors
+    if "No memory found" in error_str:
+        return error_str  # Already user-friendly
+    if "not found" in error_str.lower():
+        return error_str
+    if "database" in error_str.lower() and "locked" in error_str.lower():
+        return "Database is locked. Another process may be using it."
+    if "permission denied" in error_str.lower():
+        return "Permission denied. Check file permissions."
+
+    # Default: return original message (but strip Pydantic URLs)
+    if "pydantic" in error_str.lower() and "https://" in error_str:
+        # Remove the URL part
+        lines = error_str.split('\n')
+        filtered = [l for l in lines if "https://errors.pydantic.dev" not in l]
+        return '\n'.join(filtered).strip()
+
+    return error_str
+
+
 # =============================================================================
 # Main CLI Group
 # =============================================================================
@@ -59,10 +107,10 @@ def run_async(coro):
 
 @click.group()
 @click.version_option(version="2.0.0", prog_name="Memory Layer")
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option("--verbose", "-v", count=True, help="Increase verbosity (-v for INFO, -vv for DEBUG)")
 @click.option("--json-output", is_flag=True, help="Output in JSON format")
 @click.pass_context
-def cli(ctx: click.Context, verbose: bool, json_output: bool) -> None:
+def cli(ctx: click.Context, verbose: int, json_output: bool) -> None:
     """Memory Layer - Persistent memory for AI coding agents.
 
     Store, search, and manage memories with outcome-based learning.
@@ -71,10 +119,13 @@ def cli(ctx: click.Context, verbose: bool, json_output: bool) -> None:
     ctx.obj["verbose"] = verbose
     ctx.obj["json_output"] = json_output
 
-    if verbose:
+    # Default to WARNING (silent), -v for INFO, -vv for DEBUG
+    if verbose >= 2:
         setup_logging(level="DEBUG")
-    else:
+    elif verbose == 1:
         setup_logging(level="INFO")
+    else:
+        setup_logging(level="WARNING")
 
 
 # =============================================================================
@@ -133,7 +184,7 @@ def add_memory(
             click.echo(f"  {content[:80]}{'...' if len(content) > 80 else ''}")
     except Exception as e:
         logger.error(f"Failed to add memory: {e}")
-        raise click.ClickException(str(e))
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 @cli.command("search")
@@ -148,6 +199,7 @@ def add_memory(
 @click.option("-p", "--project", default=None, help="Filter by project")
 @click.option("--min-score", type=float, default=-1.0, help="Minimum outcome score")
 @click.option("--format", "output_format", default="brief", help="Output format (brief/detailed/context)")
+@click.option("--full", is_flag=True, help="Show full content (no truncation)")
 @click.pass_context
 def search_memories(
     ctx: click.Context,
@@ -157,6 +209,7 @@ def search_memories(
     project: Optional[str],
     min_score: float,
     output_format: str,
+    full: bool,
 ) -> None:
     """Search memories.
 
@@ -186,7 +239,8 @@ def search_memories(
         elif output_format == "detailed":
             for r in results:
                 m = r.memory
-                click.echo(f"\n[{m.id[:8]}] {m.category.value.upper()} (score: {r.score:.2f})")
+                project_tag = f"[{m.project}]" if m.project else "[global]"
+                click.echo(f"\n[{m.id[:8]}] {m.category.value.upper()} {project_tag} (score: {r.score:.2f})")
                 click.echo(f"  {m.content}")
                 click.echo(f"  Outcome: {m.outcome_score:.2f} | Used: {m.use_count}x")
         else:
@@ -195,10 +249,12 @@ def search_memories(
                 click.echo("No memories found.")
             for r in results:
                 m = r.memory
-                click.echo(f"[{m.id[:8]}] [{m.category.value}] {m.content[:60]}...")
+                project_tag = f"[{m.project}]" if m.project else "[global]"
+                content = m.content if full else f"{m.content[:60]}..."
+                click.echo(f"[{m.id[:8]}] [{m.category.value}] {project_tag} {content}")
     except Exception as e:
         logger.error(f"Search failed: {e}")
-        raise click.ClickException(str(e))
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 @cli.command("show")
@@ -248,7 +304,7 @@ def show_memory(ctx: click.Context, memory_id: str) -> None:
             click.echo(f"Created: {memory.created_at}")
     except Exception as e:
         logger.error(f"Failed to show memory: {e}")
-        raise click.ClickException(str(e))
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 @cli.command("list")
@@ -261,6 +317,7 @@ def show_memory(ctx: click.Context, memory_id: str) -> None:
 )
 @click.option("-p", "--project", default=None, help="Filter by project")
 @click.option("--archived", is_flag=True, help="Include archived memories")
+@click.option("--full", is_flag=True, help="Show full content (no truncation)")
 @click.pass_context
 def list_memories(
     ctx: click.Context,
@@ -268,6 +325,7 @@ def list_memories(
     category: Optional[str],
     project: Optional[str],
     archived: bool,
+    full: bool,
 ) -> None:
     """List memories with optional filters.
 
@@ -295,10 +353,12 @@ def list_memories(
                     score_indicator = " [+]"
                 elif m.outcome_score < -0.2:
                     score_indicator = " [-]"
-                click.echo(f"[{m.id[:8]}] [{m.category.value}] {m.content[:50]}...{score_indicator}")
+                project_tag = f"[{m.project}]" if m.project else "[global]"
+                content = m.content if full else f"{m.content[:50]}..."
+                click.echo(f"[{m.id[:8]}] [{m.category.value}] {project_tag} {content}{score_indicator}")
     except Exception as e:
         logger.error(f"Failed to list memories: {e}")
-        raise click.ClickException(str(e))
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 @cli.command("delete")
@@ -342,7 +402,7 @@ def delete_memory(ctx: click.Context, memory_id: str, confirm: bool) -> None:
         raise
     except Exception as e:
         logger.error(f"Failed to delete memory: {e}")
-        raise click.ClickException(str(e))
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 @cli.command("outcome")
@@ -392,7 +452,7 @@ def record_outcome(ctx: click.Context, memory_id: str, result: str) -> None:
         raise
     except Exception as e:
         logger.error(f"Failed to record outcome: {e}")
-        raise click.ClickException(str(e))
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 # =============================================================================
@@ -472,7 +532,7 @@ def get_context(
     except Exception as e:
         logger.error(f"Failed to get context: {e}")
         if output_format != "silent":
-            raise click.ClickException(str(e))
+            raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 @cli.command("extract")
@@ -672,7 +732,7 @@ def show_stats(ctx: click.Context, project: Optional[str]) -> None:
                     click.echo(f"  {cat}: {count}")
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
-        raise click.ClickException(str(e))
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 @cli.command("check")
@@ -869,7 +929,7 @@ def export_memories(
         click.echo(f"Exported {len(memories)} memories to {output_file}")
     except Exception as e:
         logger.error(f"Failed to export: {e}")
-        raise click.ClickException(str(e))
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
 
 
 # =============================================================================

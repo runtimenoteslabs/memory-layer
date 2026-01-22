@@ -807,10 +807,28 @@ def run_server(
         config: Optional API configuration
         engine: Optional MemoryEngine instance
     """
+    import signal
     import uvicorn
 
     app = create_app(config=config, engine=engine)
-    uvicorn.run(app, host=host, port=port)
+
+    # Configure for graceful shutdown on single Ctrl+C
+    uvicorn_config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="warning",  # Reduce noise
+        timeout_graceful_shutdown=5,  # Clean shutdown timeout
+    )
+    server = uvicorn.Server(uvicorn_config)
+
+    # Handle SIGINT (Ctrl+C) gracefully
+    def handle_sigint(sig, frame):
+        server.should_exit = True
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    server.run()
 
 
 if __name__ == "__main__":

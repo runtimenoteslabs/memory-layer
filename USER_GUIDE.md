@@ -204,6 +204,27 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
 
 ---
 
+## First-Time Performance
+
+The first time you use Memory Layer, a few things happen that may make it seem slow:
+
+1. **Embedding model download** (~100MB): On first search, the system downloads a sentence embedding model for semantic search. This happens once and is cached.
+
+2. **Database creation**: The SQLite database is created on first use at `~/.memory-layer/memories.db`.
+
+3. **Index building**: As you add memories, they get indexed for fast retrieval.
+
+**What to expect:**
+- First run: 5-30 seconds (model download)
+- Subsequent operations: <100ms
+
+If the first run seems stuck, it's likely downloading the embedding model. You can verify with:
+```bash
+mem check
+```
+
+---
+
 ## Troubleshooting
 
 ### "mem: command not found"
