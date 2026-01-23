@@ -204,6 +204,28 @@ The `mem install-plugin` command creates:
 /memory-context                  # Get project context
 ```
 
+### Beads Task Tracker Integration
+
+Memory Layer integrates with [Beads](https://github.com/steveyegge/beads) to automatically learn from task outcomes.
+
+**How it works:**
+1. You work on a Beads task, Claude searches for relevant memories
+2. Those memories get linked to your task
+3. When you mark the task done, linked memories are automatically boosted
+
+```bash
+# Sync outcomes for completed tasks
+mem beads-sync
+
+# See context for current task
+mem beads-context
+
+# View integration stats
+mem beads-stats
+```
+
+No setup required - Memory Layer auto-detects `.beads/` directories.
+
 ## Memory Categories
 
 | Category | Use For | Example |

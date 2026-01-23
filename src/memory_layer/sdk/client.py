@@ -866,6 +866,241 @@ class MemoryClient:
             response = await self._request("GET", "/health")
             return response
 
+    # =========================================================================
+    # Beads Integration
+    # =========================================================================
+
+    async def beads_sync(self, task_id: str | None = None) -> dict[str, Any]:
+        """Sync outcomes for completed Beads tasks.
+
+        When a task completes, memories that helped solve it get their
+        outcome scores boosted.
+
+        Args:
+            task_id: Optional specific task ID to sync (syncs all if None).
+
+        Returns:
+            Sync result dictionary with tasks_found, outcomes_recorded, etc.
+        """
+        self._ensure_initialized()
+
+        if self.config.mode == ClientMode.LOCAL:
+            from memory_layer.tasks import BeadsAdapter, BeadsTaskStatus
+
+            assert self._engine is not None
+            adapter = BeadsAdapter(self._engine)
+            await adapter.initialize()
+
+            if not adapter.is_available:
+                return {"success": False, "error": "Beads not available"}
+
+            if task_id:
+                task = adapter.get_task(task_id)
+                if not task:
+                    return {"success": False, "error": f"Task {task_id} not found"}
+
+                if task.status == BeadsTaskStatus.DONE:
+                    count = await adapter.on_task_done(task_id)
+                elif task.status == BeadsTaskStatus.CANCELLED:
+                    count = await adapter.on_task_cancelled(task_id)
+                elif task.status == BeadsTaskStatus.BLOCKED:
+                    count = await adapter.on_task_blocked(task_id)
+                else:
+                    count = 0
+
+                return {
+                    "success": True,
+                    "task_id": task_id,
+                    "outcomes_recorded": count,
+                }
+            else:
+                result = await adapter.sync()
+                return result.to_dict()
+        else:
+            data = {}
+            if task_id:
+                data["task_id"] = task_id
+            response = await self._request("POST", "/beads/sync", json=data)
+            return response
+
+    async def beads_context(
+        self,
+        task_id: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Get unified context for a Beads task.
+
+        Combines task info with relevant memories.
+
+        Args:
+            task_id: Task ID (uses current task if None).
+            limit: Maximum memories to include.
+
+        Returns:
+            Context dictionary with task info and memories.
+        """
+        self._ensure_initialized()
+
+        if self.config.mode == ClientMode.LOCAL:
+            from memory_layer.tasks import BeadsAdapter
+
+            assert self._engine is not None
+            adapter = BeadsAdapter(self._engine)
+            await adapter.initialize()
+
+            if not adapter.is_available:
+                return {"success": False, "error": "Beads not available"}
+
+            context = await adapter.get_unified_context(task_id, limit)
+            if not context:
+                return {"success": False, "error": "No task found"}
+
+            return {
+                "success": True,
+                "task_id": context.task.id,
+                "task_title": context.task.title,
+                "task_status": context.task.status.value,
+                "memories_count": len(context.memories),
+                "formatted": context.formatted,
+            }
+        else:
+            params: dict[str, Any] = {"limit": limit}
+            if task_id:
+                params["task_id"] = task_id
+            response = await self._request("GET", "/beads/context", params=params)
+            return response
+
+    async def beads_link(
+        self,
+        memory_id: str,
+        task_id: str | None = None,
+        context: str | None = None,
+    ) -> dict[str, Any]:
+        """Link a memory to a Beads task.
+
+        When the task completes, the memory's outcome will be recorded.
+
+        Args:
+            memory_id: Memory ID to link.
+            task_id: Task ID (uses current task if None).
+            context: Optional context about how memory is used.
+
+        Returns:
+            Link result dictionary.
+        """
+        self._ensure_initialized()
+
+        if self.config.mode == ClientMode.LOCAL:
+            from memory_layer.tasks import BeadsAdapter
+
+            assert self._engine is not None
+            adapter = BeadsAdapter(self._engine)
+            await adapter.initialize()
+
+            if not adapter.is_available:
+                return {"success": False, "error": "Beads not available"}
+
+            if task_id:
+                task = adapter.get_task(task_id)
+                if not task:
+                    return {"success": False, "error": f"Task {task_id} not found"}
+            else:
+                task = adapter.get_current_task()
+                if not task:
+                    return {"success": False, "error": "No current task found"}
+                task_id = task.id
+
+            try:
+                await self._engine.get(memory_id)
+            except Exception:
+                return {"success": False, "error": f"Memory {memory_id} not found"}
+
+            await adapter.link_memory_to_task(task_id, memory_id, context)
+            return {"success": True, "memory_id": memory_id, "task_id": task_id}
+        else:
+            data: dict[str, Any] = {"memory_id": memory_id}
+            if task_id:
+                data["task_id"] = task_id
+            if context:
+                data["context"] = context
+            response = await self._request("POST", "/beads/link", json=data)
+            return response
+
+    async def beads_tasks(
+        self,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List Beads tasks.
+
+        Args:
+            status: Optional status filter (pending, in_progress, done, etc).
+            limit: Maximum tasks to return.
+
+        Returns:
+            Dictionary with task list.
+        """
+        self._ensure_initialized()
+
+        if self.config.mode == ClientMode.LOCAL:
+            from memory_layer.tasks import BeadsAdapter, BeadsTaskStatus
+
+            assert self._engine is not None
+            adapter = BeadsAdapter(self._engine)
+            await adapter.initialize()
+
+            if not adapter.is_available:
+                return {"success": False, "error": "Beads not available"}
+
+            status_enum = None
+            if status:
+                try:
+                    status_enum = BeadsTaskStatus(status)
+                except ValueError:
+                    return {"success": False, "error": f"Invalid status: {status}"}
+
+            tasks = adapter.list_tasks(status=status_enum)[:limit]
+            return {
+                "success": True,
+                "count": len(tasks),
+                "tasks": [
+                    {
+                        "id": t.id,
+                        "title": t.title,
+                        "status": t.status.value,
+                        "is_ready": t.is_ready,
+                        "is_completed": t.is_completed,
+                    }
+                    for t in tasks
+                ],
+            }
+        else:
+            params: dict[str, Any] = {"limit": limit}
+            if status:
+                params["status"] = status
+            response = await self._request("GET", "/beads/tasks", params=params)
+            return response
+
+    async def beads_stats(self) -> dict[str, Any]:
+        """Get Beads integration statistics.
+
+        Returns:
+            Statistics dictionary.
+        """
+        self._ensure_initialized()
+
+        if self.config.mode == ClientMode.LOCAL:
+            from memory_layer.tasks import BeadsAdapter
+
+            assert self._engine is not None
+            adapter = BeadsAdapter(self._engine)
+            await adapter.initialize()
+
+            return await adapter.get_stats()
+        else:
+            response = await self._request("GET", "/beads/stats")
+            return response
+
 
 # =============================================================================
 # Synchronous Wrapper
@@ -1096,6 +1331,45 @@ class SyncMemoryClient:
         """Check client health (sync)."""
         return self._run(self._async_client.health())
 
+    # Beads integration methods
+
+    def beads_sync(self, task_id: str | None = None) -> dict[str, Any]:
+        """Sync outcomes for completed Beads tasks (sync)."""
+        return self._run(self._async_client.beads_sync(task_id=task_id))
+
+    def beads_context(
+        self,
+        task_id: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Get unified context for a Beads task (sync)."""
+        return self._run(self._async_client.beads_context(task_id=task_id, limit=limit))
+
+    def beads_link(
+        self,
+        memory_id: str,
+        task_id: str | None = None,
+        context: str | None = None,
+    ) -> dict[str, Any]:
+        """Link a memory to a Beads task (sync)."""
+        return self._run(self._async_client.beads_link(
+            memory_id=memory_id,
+            task_id=task_id,
+            context=context,
+        ))
+
+    def beads_tasks(
+        self,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List Beads tasks (sync)."""
+        return self._run(self._async_client.beads_tasks(status=status, limit=limit))
+
+    def beads_stats(self) -> dict[str, Any]:
+        """Get Beads integration statistics (sync)."""
+        return self._run(self._async_client.beads_stats())
+
 
 # =============================================================================
 # Module-Level Convenience Functions
@@ -1248,3 +1522,55 @@ async def close_default_client() -> None:
     if _default_client is not None:
         await _default_client.close()
         _default_client = None
+
+
+# =============================================================================
+# Beads Integration Convenience Functions
+# =============================================================================
+
+
+async def beads_sync(task_id: str | None = None) -> dict[str, Any]:
+    """Sync outcomes for completed Beads tasks.
+
+    Args:
+        task_id: Optional specific task ID to sync.
+
+    Returns:
+        Sync result dictionary.
+    """
+    client = await _get_client()
+    return await client.beads_sync(task_id=task_id)
+
+
+async def beads_context(
+    task_id: str | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Get unified context for a Beads task.
+
+    Args:
+        task_id: Task ID (uses current task if None).
+        limit: Maximum memories to include.
+
+    Returns:
+        Context dictionary.
+    """
+    client = await _get_client()
+    return await client.beads_context(task_id=task_id, limit=limit)
+
+
+async def beads_tasks(
+    status: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """List Beads tasks.
+
+    Args:
+        status: Optional status filter.
+        limit: Maximum tasks to return.
+
+    Returns:
+        Dictionary with task list.
+    """
+    client = await _get_client()
+    return await client.beads_tasks(status=status, limit=limit)

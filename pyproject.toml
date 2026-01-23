@@ -28,23 +28,44 @@ dependencies = [
     "numpy>=1.24.0",
     "httpx>=0.25.0",
     "pydantic>=2.5.0",
+    "pydantic-settings>=2.0.0",
     "watchdog>=3.0.0",
     "click>=8.1.0",
 ]
 
 [project.optional-dependencies]
-phase1 = [
+# Core only - minimal dependencies for storage, retrieval, engine
+# (base dependencies are enough)
+
+# Embedding - sentence transformers for semantic search
+embedding = [
     "sentence-transformers>=2.2.0",
+]
+
+# Extraction - LLM-based memory extraction
+extraction = [
     "anthropic>=0.18.0",
 ]
-phase2 = [
+
+# Server - REST API and MCP server
+server = [
     "fastapi>=0.109.0",
     "uvicorn>=0.27.0",
     "mcp>=1.0.0",
     "rich>=13.0.0",
 ]
+
+# Full installation - everything
 all = [
-    "memory-layer[phase1,phase2]",
+    "memory-layer[embedding,extraction,server]",
+]
+
+# Legacy aliases for backward compatibility
+phase1 = [
+    "memory-layer[embedding,extraction]",
+]
+phase2 = [
+    "memory-layer[server]",
 ]
 dev = [
     "pytest>=7.4.0",
@@ -61,9 +82,10 @@ dev = [
 mem = "memory_layer.cli.main:cli"
 
 [project.urls]
-Homepage = "https://github.com/memory-layer/memory-layer"
-Documentation = "https://github.com/memory-layer/memory-layer#readme"
-Repository = "https://github.com/memory-layer/memory-layer"
+Homepage = "https://github.com/runtimenoteslabs/memory-layer"
+Documentation = "https://github.com/runtimenoteslabs/memory-layer#readme"
+Repository = "https://github.com/runtimenoteslabs/memory-layer"
+Issues = "https://github.com/runtimenoteslabs/memory-layer/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memory_layer"]

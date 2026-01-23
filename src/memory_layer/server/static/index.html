@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Layer</title>
+    <link rel="stylesheet" href="/static/css/styles.css?v=7">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-brand">
+                <h1>Memory Layer</h1>
+                <span class="version">v2.0</span>
+            </div>
+            <nav class="nav">
+                <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+                <button class="nav-btn" data-view="memories">Memories</button>
+                <button class="nav-btn" data-view="search">Search</button>
+                <button class="nav-btn" data-view="add">Add Memory</button>
+                <button class="nav-btn" data-view="beads">Tasks</button>
+            </nav>
+            <div class="header-actions">
+                <button id="theme-toggle" class="icon-btn" title="Toggle theme">
+                    <span class="theme-icon">&#9790;</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Dashboard View -->
+            <section id="view-dashboard" class="view active">
+                <h2>Dashboard</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-total">-</div>
+                        <div class="stat-label">Total Memories</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-active">-</div>
+                        <div class="stat-label">Active</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-archived">-</div>
+                        <div class="stat-label">Archived</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-avg-score">-</div>
+                        <div class="stat-label">Avg Score</div>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3>Memories by Category</h3>
+                        <div id="category-chart" class="chart-container">
+                            <div class="category-bars" id="category-bars"></div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3>Recent Memories</h3>
+                        <div id="recent-memories" class="recent-list"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Quick Actions</h3>
+                    <div class="quick-actions">
+                        <button class="btn btn-primary" onclick="app.showView('add')">Add Memory</button>
+                        <button class="btn btn-secondary" onclick="app.showView('search')">Search</button>
+                        <button class="btn btn-secondary" onclick="app.exportMemories()">Export All</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Memories List View -->
+            <section id="view-memories" class="view">
+                <div class="view-header">
+                    <h2>Memories</h2>
+                    <div class="filters">
+                        <select id="filter-category" class="filter-select">
+                            <option value="">All Categories</option>
+                            <option value="architecture">Architecture</option>
+                            <option value="convention">Convention</option>
+                            <option value="decision">Decision</option>
+                            <option value="pattern">Pattern</option>
+                            <option value="gotcha">Gotcha</option>
+                            <option value="workaround">Workaround</option>
+                            <option value="troubleshooting">Troubleshooting</option>
+                            <option value="command">Command</option>
+                            <option value="preference">Preference</option>
+                            <option value="general">General</option>
+                        </select>
+                        <select id="filter-project" class="filter-select">
+                            <option value="">All Projects</option>
+                        </select>
+                        <input type="text" id="filter-search" class="filter-input" placeholder="Filter...">
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="memory-table">
+                        <thead>
+                            <tr>
+                                <th>Category</th>
+                                <th>Content</th>
+                                <th>Score</th>
+                                <th>Project</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="memories-tbody"></tbody>
+                    </table>
+                </div>
+                <div class="pagination" id="pagination"></div>
+            </section>
+
+            <!-- Search View -->
+            <section id="view-search" class="view">
+                <h2>Search Memories</h2>
+                <div class="search-box">
+                    <input type="text" id="search-input" class="search-input" placeholder="Search for memories..." autofocus>
+                    <select id="search-type" class="filter-select">
+                        <option value="semantic">Semantic (related concepts)</option>
+                        <option value="keyword">Keyword (exact match)</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="app.performSearch()">Search</button>
+                </div>
+                <div class="search-filters">
+                    <label><input type="checkbox" class="search-cat" value="architecture" checked> Architecture</label>
+                    <label><input type="checkbox" class="search-cat" value="pattern" checked> Patterns</label>
+                    <label><input type="checkbox" class="search-cat" value="convention" checked> Conventions</label>
+                    <label><input type="checkbox" class="search-cat" value="gotcha" checked> Gotchas</label>
+                    <label><input type="checkbox" class="search-cat" value="troubleshooting" checked> Troubleshooting</label>
+                    <label><input type="checkbox" class="search-cat" value="decision" checked> Decisions</label>
+                    <label><input type="checkbox" class="search-cat" value="workaround" checked> Workarounds</label>
+                    <label><input type="checkbox" class="search-cat" value="command" checked> Commands</label>
+                    <label><input type="checkbox" class="search-cat" value="preference" checked> Preferences</label>
+                    <label><input type="checkbox" class="search-cat" value="general" checked> General</label>
+                </div>
+                <div id="search-results" class="search-results"></div>
+            </section>
+
+            <!-- Beads Tasks View -->
+            <section id="view-beads" class="view">
+                <div class="view-header">
+                    <h2>Beads Tasks</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-primary" onclick="app.syncBeads()">Sync Tasks</button>
+                    </div>
+                </div>
+
+                <!-- Beads Stats -->
+                <div class="beads-stats-grid" id="beads-stats">
+                    <div class="stat-card">
+                        <div class="stat-value" id="beads-total">-</div>
+                        <div class="stat-label">Total Tasks</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="beads-in-progress">-</div>
+                        <div class="stat-label">In Progress</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="beads-pending">-</div>
+                        <div class="stat-label">Pending</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="beads-done">-</div>
+                        <div class="stat-label">Done</div>
+                    </div>
+                </div>
+
+                <!-- Task List -->
+                <div class="card">
+                    <h3>Task List</h3>
+                    <div id="beads-task-list" class="task-list"></div>
+                </div>
+
+                <!-- Task Context Modal -->
+                <div id="task-context" class="card" style="display: none;">
+                    <div class="task-context-header">
+                        <h3 id="task-context-title">Task Context</h3>
+                        <button class="btn btn-secondary btn-sm" onclick="app.closeTaskContext()">Close</button>
+                    </div>
+                    <div id="task-context-content" class="task-context-content"></div>
+                </div>
+            </section>
+
+            <!-- Add Memory View -->
+            <section id="view-add" class="view">
+                <h2>Add Memory</h2>
+                <form id="add-memory-form" class="memory-form">
+                    <div class="form-group">
+                        <label for="memory-content">Content *</label>
+                        <textarea id="memory-content" rows="4" required placeholder="Enter the memory content..."></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="memory-category">Category</label>
+                            <select id="memory-category">
+                                <option value="general">General</option>
+                                <option value="architecture">Architecture - System design decisions</option>
+                                <option value="convention">Convention - Coding standards</option>
+                                <option value="decision">Decision - Technical choices</option>
+                                <option value="pattern">Pattern - Reusable solutions</option>
+                                <option value="gotcha">Gotcha - Pitfalls to avoid</option>
+                                <option value="workaround">Workaround - Temporary fixes</option>
+                                <option value="troubleshooting">Troubleshooting - Error solutions</option>
+                                <option value="command">Command - Useful commands</option>
+                                <option value="preference">Preference - User preferences</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="memory-project">Project</label>
+                            <input type="text" id="memory-project" placeholder="Leave empty for global">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="memory-tags">Tags (comma-separated)</label>
+                        <input type="text" id="memory-tags" placeholder="python, async, database">
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save Memory</button>
+                        <button type="reset" class="btn btn-secondary">Clear</button>
+                    </div>
+                </form>
+            </section>
+        </main>
+
+        <!-- Memory Detail Modal -->
+        <div id="memory-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Memory Details</h3>
+                    <button class="close-btn" onclick="app.closeModal()">&times;</button>
+                </div>
+                <div class="modal-body" id="modal-body"></div>
+                <div class="modal-footer">
+                    <div class="outcome-buttons">
+                        <span>Record Outcome:</span>
+                        <button class="btn btn-success" onclick="app.recordOutcome('worked')">Worked</button>
+                        <button class="btn btn-warning" onclick="app.recordOutcome('partial')">Partial</button>
+                        <button class="btn btn-danger" onclick="app.recordOutcome('failed')">Failed</button>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" onclick="app.closeModal()">Close</button>
+                        <button class="btn btn-danger" onclick="app.deleteMemory()">Delete</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div id="toast-container" class="toast-container"></div>
+    </div>
+
+    <script src="/static/js/api.js?v=7"></script>
+    <script src="/static/js/app.js?v=7"></script>
+</body>
+</html>

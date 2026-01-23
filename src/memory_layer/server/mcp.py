@@ -387,6 +387,153 @@ TOOL_SCHEMAS: list[MCPToolSchema] = [
             },
         },
     ),
+    # Beads Integration Tools
+    MCPToolSchema(
+        name="beads_sync",
+        description="Sync outcomes for completed Beads tasks. When a task completes, memories that helped solve it get their outcome scores boosted.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Sync specific task ID only (optional, syncs all if not provided)",
+                },
+            },
+        },
+    ),
+    MCPToolSchema(
+        name="beads_context",
+        description="Get unified context combining Beads task info and relevant memories for the current or specified task.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID to get context for (optional, uses current task if not provided)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of memories to include (default: 10)",
+                    "default": 10,
+                },
+            },
+        },
+    ),
+    MCPToolSchema(
+        name="beads_link",
+        description="Link a memory to a Beads task for outcome tracking. When the task completes, the memory's outcome will be recorded.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "memory_id": {
+                    "type": "string",
+                    "description": "Memory ID to link",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID to link to (optional, uses current task if not provided)",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional context about how the memory is used",
+                },
+            },
+            "required": ["memory_id"],
+        },
+    ),
+    MCPToolSchema(
+        name="beads_tasks",
+        description="List Beads tasks with optional status filter.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Filter by status: pending, in_progress, done, blocked, cancelled",
+                    "enum": ["pending", "in_progress", "done", "blocked", "cancelled"],
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of tasks to return (default: 20)",
+                    "default": 20,
+                },
+            },
+        },
+    ),
+    # Unified Tasks Tools (Phase 7 - Claude Code Tasks Adapter)
+    MCPToolSchema(
+        name="tasks_list",
+        description="List tasks from all available sources (Beads and Claude Code). Provides unified access to tasks.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "Filter by source: beads, claude_code (optional, includes all if not provided)",
+                    "enum": ["beads", "claude_code"],
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Filter by status: pending, in_progress, done, completed",
+                    "enum": ["pending", "in_progress", "done", "completed"],
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of tasks to return (default: 50)",
+                    "default": 50,
+                },
+            },
+        },
+    ),
+    MCPToolSchema(
+        name="tasks_sync",
+        description="Sync outcomes for completed tasks from all sources. When a task completes, memories that helped solve it get their outcome scores boosted.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "Sync specific source only: beads, claude_code (optional, syncs all if not provided)",
+                    "enum": ["beads", "claude_code"],
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Sync specific task ID only (optional, syncs all completed if not provided)",
+                },
+            },
+        },
+    ),
+    MCPToolSchema(
+        name="tasks_context",
+        description="Get unified context combining task info and relevant memories from any source.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID to get context for (optional, uses current task if not provided)",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Source to use: beads, claude_code (optional, auto-detects from task ID)",
+                    "enum": ["beads", "claude_code"],
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of memories to include (default: 10)",
+                    "default": 10,
+                },
+            },
+        },
+    ),
+    MCPToolSchema(
+        name="tasks_stats",
+        description="Get statistics for all task integrations including available sources and task counts.",
+        input_schema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
 ]
 
 
@@ -564,6 +711,16 @@ class MCPServer:
             "delete_memory": self._handle_delete_memory,
             "list_memories": self._handle_list_memories,
             "get_stats": self._handle_get_stats,
+            # Beads integration
+            "beads_sync": self._handle_beads_sync,
+            "beads_context": self._handle_beads_context,
+            "beads_link": self._handle_beads_link,
+            "beads_tasks": self._handle_beads_tasks,
+            # Unified Tasks integration (Phase 7)
+            "tasks_list": self._handle_tasks_list,
+            "tasks_sync": self._handle_tasks_sync,
+            "tasks_context": self._handle_tasks_context,
+            "tasks_stats": self._handle_tasks_stats,
         }
 
     def _ensure_engine(self) -> MemoryEngine:
@@ -951,6 +1108,352 @@ class MCPServer:
         stats = await engine.stats(project=project)
 
         return stats
+
+    # -------------------------------------------------------------------------
+    # Beads Integration Handlers
+    # -------------------------------------------------------------------------
+
+    def _get_beads_adapter(self):
+        """Get or create the Beads adapter."""
+        if not hasattr(self, "_beads_adapter"):
+            from memory_layer.tasks import BeadsAdapter
+            engine = self._ensure_engine()
+            self._beads_adapter = BeadsAdapter(engine)
+        return self._beads_adapter
+
+    async def _ensure_beads_initialized(self):
+        """Ensure Beads adapter is initialized."""
+        adapter = self._get_beads_adapter()
+        if not adapter._initialized:
+            await adapter.initialize()
+        return adapter
+
+    async def _handle_beads_sync(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle beads_sync tool."""
+        adapter = await self._ensure_beads_initialized()
+
+        if not adapter.is_available:
+            return {
+                "success": False,
+                "error": "Beads not available (no .beads/ directory found)",
+            }
+
+        task_id = validate_string(args.get("task_id"), "task_id", required=False)
+
+        if task_id:
+            # Sync specific task
+            from memory_layer.tasks import BeadsTaskStatus
+            task = adapter.get_task(task_id)
+            if not task:
+                return {"success": False, "error": f"Task {task_id} not found"}
+
+            if task.status == BeadsTaskStatus.DONE:
+                count = await adapter.on_task_done(task_id)
+            elif task.status == BeadsTaskStatus.CANCELLED:
+                count = await adapter.on_task_cancelled(task_id)
+            elif task.status == BeadsTaskStatus.BLOCKED:
+                count = await adapter.on_task_blocked(task_id)
+            else:
+                count = 0
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "task_status": task.status.value,
+                "outcomes_recorded": count,
+            }
+        else:
+            # Sync all completed tasks
+            result = await adapter.sync()
+            return {
+                "success": result.success,
+                "tasks_found": result.tasks_found,
+                "tasks_synced": result.tasks_synced,
+                "outcomes_recorded": result.outcomes_recorded,
+                "errors": result.errors,
+                "warnings": result.warnings,
+            }
+
+    async def _handle_beads_context(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle beads_context tool."""
+        adapter = await self._ensure_beads_initialized()
+
+        if not adapter.is_available:
+            return {
+                "success": False,
+                "error": "Beads not available (no .beads/ directory found)",
+            }
+
+        task_id = validate_string(args.get("task_id"), "task_id", required=False)
+        limit = validate_integer(args.get("limit"), "limit", 1, 50, default=10)
+
+        context = await adapter.get_unified_context(task_id, limit)
+
+        if not context:
+            return {
+                "success": False,
+                "error": "No task found",
+            }
+
+        return {
+            "success": True,
+            "task_id": context.task.id,
+            "task_title": context.task.title,
+            "task_status": context.task.status.value,
+            "task_description": context.task.description,
+            "memories_count": len(context.memories),
+            "formatted": context.formatted,
+            "memories": [
+                {
+                    "id": getattr(m, "id", ""),
+                    "content": getattr(m, "content", str(m))[:200],
+                    "category": getattr(getattr(m, "category", None), "value", "unknown"),
+                }
+                for m in context.memories
+            ],
+        }
+
+    async def _handle_beads_link(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle beads_link tool."""
+        adapter = await self._ensure_beads_initialized()
+
+        if not adapter.is_available:
+            return {
+                "success": False,
+                "error": "Beads not available (no .beads/ directory found)",
+            }
+
+        memory_id = validate_string(args.get("memory_id"), "memory_id", min_length=1)
+        task_id = validate_string(args.get("task_id"), "task_id", required=False)
+        context = validate_string(args.get("context"), "context", required=False)
+
+        # Get task ID
+        if task_id:
+            task = adapter.get_task(task_id)
+            if not task:
+                return {"success": False, "error": f"Task {task_id} not found"}
+        else:
+            task = adapter.get_current_task()
+            if not task:
+                return {"success": False, "error": "No current task found"}
+            task_id = task.id
+
+        # Verify memory exists
+        engine = self._ensure_engine()
+        try:
+            await engine.get(memory_id)
+        except Exception:
+            return {"success": False, "error": f"Memory {memory_id} not found"}
+
+        # Create link
+        await adapter.link_memory_to_task(task_id, memory_id, context)
+
+        return {
+            "success": True,
+            "memory_id": memory_id,
+            "task_id": task_id,
+            "context": context,
+        }
+
+    async def _handle_beads_tasks(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle beads_tasks tool."""
+        adapter = await self._ensure_beads_initialized()
+
+        if not adapter.is_available:
+            return {
+                "success": False,
+                "error": "Beads not available (no .beads/ directory found)",
+            }
+
+        status_str = validate_string(args.get("status"), "status", required=False)
+        limit = validate_integer(args.get("limit"), "limit", 1, 100, default=20)
+
+        # Parse status filter
+        status = None
+        if status_str:
+            from memory_layer.tasks import BeadsTaskStatus
+            try:
+                status = BeadsTaskStatus(status_str)
+            except ValueError:
+                return {"success": False, "error": f"Invalid status: {status_str}"}
+
+        tasks = adapter.list_tasks(status=status)[:limit]
+
+        return {
+            "success": True,
+            "count": len(tasks),
+            "tasks": [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "status": t.status.value,
+                    "description": t.description[:100] if t.description else "",
+                    "is_ready": t.is_ready,
+                    "is_completed": t.is_completed,
+                }
+                for t in tasks
+            ],
+        }
+
+    # -------------------------------------------------------------------------
+    # Unified Tasks Handlers (Phase 7 - Claude Code Tasks Adapter)
+    # -------------------------------------------------------------------------
+
+    def _get_unified_adapter(self):
+        """Get or create the unified task adapter."""
+        if not hasattr(self, "_unified_adapter"):
+            from memory_layer.tasks import UnifiedTaskAdapter
+            engine = self._ensure_engine()
+            self._unified_adapter = UnifiedTaskAdapter(engine)
+        return self._unified_adapter
+
+    async def _ensure_unified_initialized(self):
+        """Ensure unified adapter is initialized."""
+        adapter = self._get_unified_adapter()
+        if not adapter._initialized:
+            await adapter.initialize()
+        return adapter
+
+    async def _handle_tasks_list(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle tasks_list tool."""
+        adapter = await self._ensure_unified_initialized()
+
+        source_str = validate_string(args.get("source"), "source", required=False)
+        status_str = validate_string(args.get("status"), "status", required=False)
+        limit = validate_integer(args.get("limit"), "limit", 1, 200, default=50)
+
+        # Parse source filter
+        source = None
+        if source_str:
+            from memory_layer.tasks import TaskSource
+            try:
+                source = TaskSource(source_str)
+            except ValueError:
+                return {"success": False, "error": f"Invalid source: {source_str}"}
+
+        tasks = adapter.list_tasks(source=source, status=status_str)[:limit]
+
+        return {
+            "success": True,
+            "count": len(tasks),
+            "sources": [s.value for s in adapter.available_sources],
+            "tasks": [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "status": t.status,
+                    "description": t.description[:100] if t.description else "",
+                    "source": t.source.value,
+                    "is_ready": t.is_ready,
+                    "is_completed": t.is_completed,
+                }
+                for t in tasks
+            ],
+        }
+
+    async def _handle_tasks_sync(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle tasks_sync tool."""
+        adapter = await self._ensure_unified_initialized()
+
+        source_str = validate_string(args.get("source"), "source", required=False)
+        task_id = validate_string(args.get("task_id"), "task_id", required=False)
+
+        if task_id:
+            # Sync specific task
+            count = await adapter.on_task_completed(task_id)
+            return {
+                "success": True,
+                "task_id": task_id,
+                "outcomes_recorded": count,
+            }
+
+        # Parse source filter
+        source = None
+        if source_str:
+            from memory_layer.tasks import TaskSource
+            try:
+                source = TaskSource(source_str)
+            except ValueError:
+                return {"success": False, "error": f"Invalid source: {source_str}"}
+
+        result = await adapter.sync(source=source)
+
+        if hasattr(result, 'results'):
+            # UnifiedSyncResult
+            return {
+                "success": result.success,
+                "total_tasks_found": result.total_tasks_found,
+                "total_tasks_synced": result.total_tasks_synced,
+                "total_outcomes_recorded": result.total_outcomes_recorded,
+                "results": {k.value: v.to_dict() for k, v in result.results.items()},
+                "errors": result.errors,
+            }
+        else:
+            # Single TaskSyncResult
+            return {
+                "success": result.success,
+                "source": result.source.value,
+                "tasks_found": result.tasks_found,
+                "tasks_synced": result.tasks_synced,
+                "outcomes_recorded": result.outcomes_recorded,
+                "errors": result.errors,
+            }
+
+    async def _handle_tasks_context(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle tasks_context tool."""
+        adapter = await self._ensure_unified_initialized()
+
+        task_id = validate_string(args.get("task_id"), "task_id", required=False)
+        source_str = validate_string(args.get("source"), "source", required=False)
+        limit = validate_integer(args.get("limit"), "limit", 1, 50, default=10)
+
+        # Parse source filter
+        source = None
+        if source_str:
+            from memory_layer.tasks import TaskSource
+            try:
+                source = TaskSource(source_str)
+            except ValueError:
+                return {"success": False, "error": f"Invalid source: {source_str}"}
+
+        context = await adapter.get_unified_context(task_id, source, limit)
+
+        if not context:
+            return {
+                "success": False,
+                "error": "No task found",
+            }
+
+        return {
+            "success": True,
+            "task_id": context.task.id,
+            "task_title": context.task.title,
+            "task_status": context.task.status.value,
+            "source": context.source.value,
+            "memories_count": len(context.memories),
+            "formatted": context.formatted,
+            "memories": [
+                {
+                    "id": getattr(m, "id", ""),
+                    "content": getattr(m, "content", str(m))[:200],
+                    "category": getattr(getattr(m, "category", None), "value", "unknown"),
+                }
+                for m in context.memories
+            ],
+        }
+
+    async def _handle_tasks_stats(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle tasks_stats tool."""
+        adapter = await self._ensure_unified_initialized()
+
+        stats = await adapter.get_stats()
+
+        return {
+            "success": True,
+            "available_sources": stats.get("available_sources", []),
+            "beads": stats.get("beads", {}),
+            "claude_code": stats.get("claude_code", {}),
+        }
 
     # -------------------------------------------------------------------------
     # Transport

@@ -108,6 +108,7 @@ class SearchRequest(BaseModel):
     categories: Optional[list[MemoryCategory]] = None
     project: Optional[str] = None
     min_score: float = Field(default=-1.0, ge=-1.0, le=1.0)
+    search_type: str = Field(default="semantic", pattern="^(semantic|keyword)$")
 
 
 class OutcomeRequest(BaseModel):
@@ -216,12 +217,30 @@ class StatsResponse(BaseModel):
     total_uses: int
 
 
+class ComponentHealth(BaseModel):
+    """Health status of a single component."""
+
+    name: str
+    status: str
+    message: str = ""
+    duration_ms: float = 0.0
+
+
 class HealthResponse(BaseModel):
     """Response model for health check."""
 
     status: str
     version: str
     timestamp: datetime
+    checks: list[ComponentHealth] = Field(default_factory=list)
+
+
+class ReadinessResponse(BaseModel):
+    """Response model for readiness check."""
+
+    ready: bool
+    message: str = ""
+    checks: dict[str, bool] = Field(default_factory=dict)
 
 
 class ErrorResponse(BaseModel):
@@ -460,6 +479,11 @@ def create_app(
     Returns:
         Configured FastAPI application
     """
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
     # Set up state
     if config:
         _app_state.config = config
@@ -497,6 +521,16 @@ def create_app(
     # Register routes
     app.include_router(router)
 
+    # Static files for Web UI
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+        @app.get("/", include_in_schema=False)
+        async def serve_index():
+            """Serve the Web UI index page."""
+            return FileResponse(static_dir / "index.html")
+
     return app
 
 
@@ -510,12 +544,128 @@ router = APIRouter()
 
 
 @router.get("/health", response_model=HealthResponse, tags=["System"])
-async def health_check():
-    """Health check endpoint."""
+async def health_check(
+    engine: MemoryEngine = Depends(get_engine),
+):
+    """Comprehensive health check endpoint.
+
+    Returns overall health status and individual component checks.
+    """
+    checks = []
+    overall_healthy = True
+
+    # Check database connectivity
+    try:
+        start = time.time()
+        stats = await engine.stats()
+        duration_ms = (time.time() - start) * 1000
+        checks.append(
+            ComponentHealth(
+                name="database",
+                status="healthy",
+                message=f"{stats.storage_stats.total_memories} memories",
+                duration_ms=round(duration_ms, 2),
+            )
+        )
+    except Exception as e:
+        checks.append(
+            ComponentHealth(
+                name="database",
+                status="unhealthy",
+                message=str(e),
+            )
+        )
+        overall_healthy = False
+
+    # Check embedding model (if available)
+    try:
+        if engine._embedding_provider:
+            start = time.time()
+            # Quick embedding test
+            await engine._embedding_provider.embed("test")
+            duration_ms = (time.time() - start) * 1000
+            checks.append(
+                ComponentHealth(
+                    name="embedding",
+                    status="healthy",
+                    message="Model loaded",
+                    duration_ms=round(duration_ms, 2),
+                )
+            )
+    except Exception as e:
+        checks.append(
+            ComponentHealth(
+                name="embedding",
+                status="degraded",
+                message=str(e),
+            )
+        )
+
     return HealthResponse(
-        status="healthy",
+        status="healthy" if overall_healthy else "unhealthy",
         version="2.0.0",
         timestamp=datetime.now(timezone.utc),
+        checks=checks,
+    )
+
+
+@router.get("/health/live", tags=["System"])
+async def liveness_check():
+    """Kubernetes liveness probe.
+
+    Returns 200 if the service is running.
+    """
+    return {"alive": True}
+
+
+@router.get("/health/ready", response_model=ReadinessResponse, tags=["System"])
+async def readiness_check(
+    engine: MemoryEngine = Depends(get_engine),
+):
+    """Kubernetes readiness probe.
+
+    Returns 200 if the service is ready to handle requests.
+    """
+    checks = {}
+
+    # Check database
+    try:
+        await engine.stats()
+        checks["database"] = True
+    except Exception:
+        checks["database"] = False
+
+    ready = all(checks.values())
+
+    if not ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service not ready",
+        )
+
+    return ReadinessResponse(
+        ready=ready,
+        message="All systems operational" if ready else "Some systems unavailable",
+        checks=checks,
+    )
+
+
+@router.get("/metrics", tags=["System"])
+async def get_metrics():
+    """Prometheus metrics endpoint.
+
+    Returns metrics in Prometheus text format.
+    """
+    from memory_layer.core.observability import get_metrics_collector
+
+    collector = get_metrics_collector()
+    metrics_text = collector.to_prometheus()
+
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse(
+        content=metrics_text,
+        media_type="text/plain; charset=utf-8",
     )
 
 
@@ -672,7 +822,38 @@ async def search_memories(
     engine: MemoryEngine = Depends(get_engine),
     _: Optional[str] = Depends(verify_api_key),
 ):
-    """Search memories by query."""
+    """Search memories by query.
+
+    Supports two search types:
+    - semantic: Vector similarity search (finds conceptually related memories)
+    - keyword: Full-text search (exact keyword matching)
+    """
+    if request.search_type == "keyword":
+        # Use FTS for keyword search
+        memories = await engine._storage.search_fts(
+            query=request.query,
+            project=request.project,
+            limit=request.limit,
+        )
+        # Filter by category if specified
+        if request.categories:
+            memories = [m for m in memories if m.category in request.categories]
+
+        return SearchResponse(
+            count=len(memories),
+            results=[
+                SearchResultResponse(
+                    memory=MemoryResponse.from_memory(m),
+                    score=1.0,  # FTS doesn't provide similarity scores
+                    semantic_score=0.0,
+                    recency_score=0.0,
+                    frequency_score=0.0,
+                )
+                for m in memories
+            ],
+        )
+
+    # Semantic search (default)
     # Engine only supports single category, use first if list provided
     category = request.categories[0] if request.categories else None
     results = await engine.search(
@@ -786,6 +967,652 @@ async def ingest_transcript(
         "project": request.project,
         "session_id": request.session_id,
     }
+
+
+# -----------------------------------------------------------------------------
+# Beads Integration
+# -----------------------------------------------------------------------------
+
+
+class BeadsSyncRequest(BaseModel):
+    """Request model for Beads sync."""
+
+    task_id: Optional[str] = Field(default=None, description="Sync specific task only")
+
+
+class BeadsSyncResponse(BaseModel):
+    """Response model for Beads sync."""
+
+    success: bool
+    tasks_found: int = 0
+    tasks_synced: int = 0
+    outcomes_recorded: int = 0
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BeadsContextResponse(BaseModel):
+    """Response model for Beads context."""
+
+    success: bool
+    task_id: Optional[str] = None
+    task_title: Optional[str] = None
+    task_status: Optional[str] = None
+    task_description: Optional[str] = None
+    memories_count: int = 0
+    formatted: str = ""
+    error: Optional[str] = None
+
+
+class BeadsLinkRequest(BaseModel):
+    """Request model for linking memory to task."""
+
+    memory_id: str = Field(..., min_length=1)
+    task_id: Optional[str] = Field(default=None, description="Task to link to (uses current if not provided)")
+    context: Optional[str] = Field(default=None, description="Context about how memory is used")
+
+
+class BeadsLinkResponse(BaseModel):
+    """Response model for link operation."""
+
+    success: bool
+    memory_id: Optional[str] = None
+    task_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class BeadsTaskResponse(BaseModel):
+    """Response model for a single task."""
+
+    id: str
+    title: str
+    status: str
+    description: str = ""
+    is_ready: bool = False
+    is_completed: bool = False
+
+
+class BeadsTasksResponse(BaseModel):
+    """Response model for task list."""
+
+    success: bool
+    count: int = 0
+    tasks: list[BeadsTaskResponse] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class BeadsStatsResponse(BaseModel):
+    """Response model for Beads stats."""
+
+    beads_available: bool
+    beads_dir: Optional[str] = None
+    tasks: dict = Field(default_factory=dict)
+    links: dict = Field(default_factory=dict)
+    auto_outcome_enabled: bool = True
+    outcome_on_cancel: bool = False
+
+
+# Beads adapter singleton
+_beads_adapter = None
+
+
+async def get_beads_adapter(engine: MemoryEngine = Depends(get_engine)):
+    """Get or create the Beads adapter."""
+    global _beads_adapter
+    if _beads_adapter is None:
+        from memory_layer.tasks import BeadsAdapter
+        _beads_adapter = BeadsAdapter(engine)
+    if not _beads_adapter._initialized:
+        await _beads_adapter.initialize()
+    return _beads_adapter
+
+
+@router.post("/beads/sync", response_model=BeadsSyncResponse, tags=["Beads"])
+async def beads_sync(
+    request: BeadsSyncRequest = None,
+    adapter = Depends(get_beads_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Sync outcomes for completed Beads tasks.
+
+    When a task completes, memories that helped solve it get their outcome scores boosted.
+    """
+    if not adapter.is_available:
+        return BeadsSyncResponse(
+            success=False,
+            errors=["Beads not available (no .beads/ directory found)"],
+        )
+
+    if request and request.task_id:
+        # Sync specific task
+        from memory_layer.tasks import BeadsTaskStatus
+        task = adapter.get_task(request.task_id)
+        if not task:
+            return BeadsSyncResponse(success=False, errors=[f"Task {request.task_id} not found"])
+
+        if task.status == BeadsTaskStatus.DONE:
+            count = await adapter.on_task_done(request.task_id)
+        elif task.status == BeadsTaskStatus.CANCELLED:
+            count = await adapter.on_task_cancelled(request.task_id)
+        elif task.status == BeadsTaskStatus.BLOCKED:
+            count = await adapter.on_task_blocked(request.task_id)
+        else:
+            count = 0
+
+        return BeadsSyncResponse(
+            success=True,
+            tasks_found=1,
+            tasks_synced=1 if count > 0 else 0,
+            outcomes_recorded=count,
+        )
+    else:
+        # Sync all
+        result = await adapter.sync()
+        return BeadsSyncResponse(
+            success=result.success,
+            tasks_found=result.tasks_found,
+            tasks_synced=result.tasks_synced,
+            outcomes_recorded=result.outcomes_recorded,
+            errors=result.errors,
+            warnings=result.warnings,
+        )
+
+
+@router.get("/beads/context", response_model=BeadsContextResponse, tags=["Beads"])
+async def beads_context(
+    task_id: Optional[str] = Query(None, description="Task ID (uses current if not provided)"),
+    limit: int = Query(10, ge=1, le=50, description="Max memories to include"),
+    adapter = Depends(get_beads_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get unified context combining task info and relevant memories."""
+    if not adapter.is_available:
+        return BeadsContextResponse(
+            success=False,
+            error="Beads not available (no .beads/ directory found)",
+        )
+
+    context = await adapter.get_unified_context(task_id, limit)
+
+    if not context:
+        return BeadsContextResponse(
+            success=False,
+            error="No task found",
+        )
+
+    return BeadsContextResponse(
+        success=True,
+        task_id=context.task.id,
+        task_title=context.task.title,
+        task_status=context.task.status.value,
+        task_description=context.task.description,
+        memories_count=len(context.memories),
+        formatted=context.formatted,
+    )
+
+
+@router.post("/beads/link", response_model=BeadsLinkResponse, tags=["Beads"])
+async def beads_link(
+    request: BeadsLinkRequest,
+    adapter = Depends(get_beads_adapter),
+    engine: MemoryEngine = Depends(get_engine),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Link a memory to a Beads task for outcome tracking."""
+    if not adapter.is_available:
+        return BeadsLinkResponse(
+            success=False,
+            error="Beads not available (no .beads/ directory found)",
+        )
+
+    # Get task ID
+    task_id = request.task_id
+    if task_id:
+        task = adapter.get_task(task_id)
+        if not task:
+            return BeadsLinkResponse(success=False, error=f"Task {task_id} not found")
+    else:
+        task = adapter.get_current_task()
+        if not task:
+            return BeadsLinkResponse(success=False, error="No current task found")
+        task_id = task.id
+
+    # Verify memory exists
+    try:
+        await engine.get(request.memory_id)
+    except Exception:
+        return BeadsLinkResponse(success=False, error=f"Memory {request.memory_id} not found")
+
+    # Create link
+    await adapter.link_memory_to_task(task_id, request.memory_id, request.context)
+
+    return BeadsLinkResponse(
+        success=True,
+        memory_id=request.memory_id,
+        task_id=task_id,
+    )
+
+
+@router.get("/beads/tasks", response_model=BeadsTasksResponse, tags=["Beads"])
+async def beads_tasks(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    limit: int = Query(20, ge=1, le=100, description="Max tasks to return"),
+    adapter = Depends(get_beads_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """List Beads tasks with optional status filter."""
+    if not adapter.is_available:
+        return BeadsTasksResponse(
+            success=False,
+            error="Beads not available (no .beads/ directory found)",
+        )
+
+    # Parse status filter
+    status_enum = None
+    if status:
+        from memory_layer.tasks import BeadsTaskStatus
+        try:
+            status_enum = BeadsTaskStatus(status)
+        except ValueError:
+            return BeadsTasksResponse(success=False, error=f"Invalid status: {status}")
+
+    tasks = adapter.list_tasks(status=status_enum)[:limit]
+
+    return BeadsTasksResponse(
+        success=True,
+        count=len(tasks),
+        tasks=[
+            BeadsTaskResponse(
+                id=t.id,
+                title=t.title,
+                status=t.status.value,
+                description=t.description[:100] if t.description else "",
+                is_ready=t.is_ready,
+                is_completed=t.is_completed,
+            )
+            for t in tasks
+        ],
+    )
+
+
+@router.get("/beads/tasks/{task_id}", response_model=BeadsTaskResponse, tags=["Beads"])
+async def beads_task_detail(
+    task_id: str,
+    adapter = Depends(get_beads_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get details for a specific task."""
+    if not adapter.is_available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Beads not available",
+        )
+
+    task = adapter.get_task(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task {task_id} not found",
+        )
+
+    return BeadsTaskResponse(
+        id=task.id,
+        title=task.title,
+        status=task.status.value,
+        description=task.description,
+        is_ready=task.is_ready,
+        is_completed=task.is_completed,
+    )
+
+
+@router.get("/beads/tasks/{task_id}/memories", tags=["Beads"])
+async def beads_task_memories(
+    task_id: str,
+    adapter = Depends(get_beads_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get memories linked to a task."""
+    if not adapter.is_available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Beads not available",
+        )
+
+    task = adapter.get_task(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task {task_id} not found",
+        )
+
+    memories = await adapter.get_task_memories(task_id)
+
+    return {
+        "task_id": task_id,
+        "count": len(memories),
+        "memories": [
+            {
+                "id": m.id,
+                "content": m.content[:200] + "..." if len(m.content) > 200 else m.content,
+                "category": m.category.value,
+                "outcome_score": m.outcome_score,
+            }
+            for m in memories
+        ],
+    }
+
+
+@router.get("/beads/stats", response_model=BeadsStatsResponse, tags=["Beads"])
+async def beads_stats(
+    adapter = Depends(get_beads_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get Beads integration statistics."""
+    stats = await adapter.get_stats()
+    return BeadsStatsResponse(**stats)
+
+
+# -----------------------------------------------------------------------------
+# Unified Tasks Integration (Phase 7 - Claude Code Tasks Adapter)
+# -----------------------------------------------------------------------------
+
+
+class TaskResponse(BaseModel):
+    """Response model for a unified task."""
+
+    id: str
+    title: str
+    status: str
+    description: str = ""
+    source: str  # "beads" or "claude_code"
+    is_ready: bool = False
+    is_completed: bool = False
+
+
+class TasksListResponse(BaseModel):
+    """Response model for unified task list."""
+
+    success: bool
+    count: int = 0
+    tasks: list[TaskResponse] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class TasksSyncRequest(BaseModel):
+    """Request model for unified tasks sync."""
+
+    source: Optional[str] = Field(
+        default=None,
+        description="Source to sync: 'beads', 'claude_code', or None for all",
+    )
+    task_id: Optional[str] = Field(default=None, description="Sync specific task only")
+
+
+class TasksSyncResponse(BaseModel):
+    """Response model for unified tasks sync."""
+
+    success: bool
+    total_tasks_found: int = 0
+    total_tasks_synced: int = 0
+    total_outcomes_recorded: int = 0
+    results: dict = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+
+
+class TasksContextResponse(BaseModel):
+    """Response model for unified tasks context."""
+
+    success: bool
+    task_id: Optional[str] = None
+    task_title: Optional[str] = None
+    task_status: Optional[str] = None
+    task_description: Optional[str] = None
+    source: Optional[str] = None
+    memories_count: int = 0
+    formatted: str = ""
+    error: Optional[str] = None
+
+
+class TasksStatsResponse(BaseModel):
+    """Response model for unified tasks stats."""
+
+    available_sources: list[str] = Field(default_factory=list)
+    beads: dict = Field(default_factory=dict)
+    claude_code: dict = Field(default_factory=dict)
+
+
+# Unified adapter singleton
+_unified_adapter = None
+
+
+async def get_unified_adapter(engine: MemoryEngine = Depends(get_engine)):
+    """Get or create the unified task adapter."""
+    global _unified_adapter
+    if _unified_adapter is None:
+        from memory_layer.tasks import UnifiedTaskAdapter
+        _unified_adapter = UnifiedTaskAdapter(engine)
+    if not _unified_adapter._initialized:
+        await _unified_adapter.initialize()
+    return _unified_adapter
+
+
+@router.get("/tasks", response_model=TasksListResponse, tags=["Tasks"])
+async def list_tasks(
+    source: Optional[str] = Query(None, description="Filter by source: beads, claude_code"),
+    task_status: Optional[str] = Query(None, description="Filter by status: pending, in_progress, done"),
+    limit: int = Query(50, ge=1, le=200, description="Max tasks to return"),
+    adapter = Depends(get_unified_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """List tasks from all available sources.
+
+    Combines tasks from Beads (.beads/) and Claude Code (~/.claude/todos/).
+    """
+    from memory_layer.tasks import TaskSource
+
+    # Parse source filter
+    source_filter = None
+    if source:
+        try:
+            source_filter = TaskSource(source)
+        except ValueError:
+            return TasksListResponse(
+                success=False,
+                error=f"Invalid source: {source}. Use 'beads' or 'claude_code'",
+            )
+
+    tasks = adapter.list_tasks(source=source_filter, status=task_status)[:limit]
+
+    return TasksListResponse(
+        success=True,
+        count=len(tasks),
+        tasks=[
+            TaskResponse(
+                id=t.id,
+                title=t.title,
+                status=t.status,
+                description=t.description[:100] if t.description else "",
+                source=t.source.value,
+                is_ready=t.is_ready,
+                is_completed=t.is_completed,
+            )
+            for t in tasks
+        ],
+        sources=[s.value for s in adapter.available_sources],
+    )
+
+
+@router.get("/tasks/{task_id}", response_model=TaskResponse, tags=["Tasks"])
+async def get_task(
+    task_id: str,
+    adapter = Depends(get_unified_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get a specific task by ID from any source."""
+    task = adapter.get_task(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task {task_id} not found",
+        )
+
+    return TaskResponse(
+        id=task.id,
+        title=task.title,
+        status=task.status,
+        description=task.description,
+        source=task.source.value,
+        is_ready=task.is_ready,
+        is_completed=task.is_completed,
+    )
+
+
+@router.post("/tasks/sync", response_model=TasksSyncResponse, tags=["Tasks"])
+async def sync_tasks(
+    request: TasksSyncRequest = None,
+    adapter = Depends(get_unified_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Sync outcomes for completed tasks from all sources.
+
+    When a task completes, memories that helped solve it get their outcome scores boosted.
+    """
+    from memory_layer.tasks import TaskSource
+
+    if request and request.task_id:
+        # Sync specific task
+        count = await adapter.on_task_completed(request.task_id)
+        return TasksSyncResponse(
+            success=True,
+            total_tasks_found=1,
+            total_tasks_synced=1 if count > 0 else 0,
+            total_outcomes_recorded=count,
+        )
+
+    # Parse source filter
+    source_filter = None
+    if request and request.source:
+        try:
+            source_filter = TaskSource(request.source)
+        except ValueError:
+            return TasksSyncResponse(
+                success=False,
+                errors=[f"Invalid source: {request.source}"],
+            )
+
+    # Sync all or specific source
+    result = await adapter.sync(source=source_filter)
+
+    if hasattr(result, 'results'):
+        # UnifiedSyncResult
+        return TasksSyncResponse(
+            success=result.success,
+            total_tasks_found=result.total_tasks_found,
+            total_tasks_synced=result.total_tasks_synced,
+            total_outcomes_recorded=result.total_outcomes_recorded,
+            results={k.value: v.to_dict() for k, v in result.results.items()},
+            errors=result.errors,
+        )
+    else:
+        # Single TaskSyncResult
+        return TasksSyncResponse(
+            success=result.success,
+            total_tasks_found=result.tasks_found,
+            total_tasks_synced=result.tasks_synced,
+            total_outcomes_recorded=result.outcomes_recorded,
+            results={result.source.value: result.to_dict()},
+            errors=result.errors,
+        )
+
+
+@router.get("/tasks/context", response_model=TasksContextResponse, tags=["Tasks"])
+async def get_tasks_context(
+    task_id: Optional[str] = Query(None, description="Task ID (uses current if not provided)"),
+    source: Optional[str] = Query(None, description="Source: beads, claude_code"),
+    limit: int = Query(10, ge=1, le=50, description="Max memories to include"),
+    adapter = Depends(get_unified_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get unified context combining task info and relevant memories."""
+    from memory_layer.tasks import TaskSource
+
+    # Parse source filter
+    source_filter = None
+    if source:
+        try:
+            source_filter = TaskSource(source)
+        except ValueError:
+            return TasksContextResponse(
+                success=False,
+                error=f"Invalid source: {source}",
+            )
+
+    context = await adapter.get_unified_context(task_id, source_filter, limit)
+
+    if not context:
+        return TasksContextResponse(
+            success=False,
+            error="No task found",
+        )
+
+    return TasksContextResponse(
+        success=True,
+        task_id=context.task.id,
+        task_title=context.task.title,
+        task_status=context.task.status.value,
+        task_description=context.task.description if hasattr(context.task, 'description') else context.task.content,
+        source=context.source.value,
+        memories_count=len(context.memories),
+        formatted=context.formatted,
+    )
+
+
+@router.get("/tasks/{task_id}/memories", tags=["Tasks"])
+async def get_task_memories(
+    task_id: str,
+    adapter = Depends(get_unified_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get memories linked to a task."""
+    task = adapter.get_task(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task {task_id} not found",
+        )
+
+    memories = await adapter.get_task_memories(task_id, source=task.source)
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "source": task.source.value,
+        "count": len(memories),
+        "memories": [
+            {
+                "id": m.id,
+                "content": m.content[:200] + "..." if len(m.content) > 200 else m.content,
+                "category": m.category.value,
+                "outcome_score": m.outcome_score,
+            }
+            for m in memories
+        ],
+    }
+
+
+@router.get("/tasks/stats", response_model=TasksStatsResponse, tags=["Tasks"])
+async def get_tasks_stats(
+    adapter = Depends(get_unified_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get statistics for all task integrations."""
+    stats = await adapter.get_stats()
+    return TasksStatsResponse(
+        available_sources=stats.get("available_sources", []),
+        beads=stats.get("beads", {}),
+        claude_code=stats.get("claude_code", {}),
+    )
 
 
 # =============================================================================

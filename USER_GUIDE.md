@@ -225,6 +225,61 @@ mem check
 
 ---
 
+## Beads Integration
+
+If you use [Beads](https://github.com/steveyegge/beads) for task tracking, Memory Layer can automatically learn from your task outcomes.
+
+### How It Works
+
+1. When you work on a Beads task, Claude searches for relevant memories
+2. Those memories get linked to your task
+3. When you mark the task as done, the memories that helped are automatically boosted
+
+```
+Task "bd-a3f8" marked "done"
+    → Memories used during this task get +0.2 boost
+    → Good advice rises to the top over time
+```
+
+### Setup
+
+No additional setup needed. Memory Layer detects Beads automatically if you have a `.beads/` directory in your project.
+
+### CLI Commands
+
+```bash
+# Sync outcomes for all completed tasks
+mem beads-sync
+
+# Sync a specific task
+mem beads-sync --task bd-a3f8
+
+# See task context with relevant memories
+mem beads-context
+
+# Link a memory to current task
+mem beads-link <memory_id>
+
+# View Beads integration stats
+mem beads-stats
+```
+
+### Automatic vs Manual
+
+**Automatic (recommended):** Just use Beads normally. When tasks complete, outcomes are recorded automatically on next sync.
+
+**Manual:** If you want explicit control, disable auto-outcome and use `mem beads-sync` manually.
+
+### What Gets Recorded
+
+| Task Status | Memory Outcome | Score Change |
+|-------------|----------------|--------------|
+| `done` | worked | +0.2 |
+| `cancelled` | failed (if enabled) | -0.3 |
+| `blocked` | partial | +0.05 |
+
+---
+
 ## Troubleshooting
 
 ### "mem: command not found"

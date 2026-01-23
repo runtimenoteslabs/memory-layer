@@ -1292,6 +1292,612 @@ def install_plugin(ctx: click.Context, force: bool) -> None:
 
 
 # =============================================================================
+# Beads Integration Commands
+# =============================================================================
+
+
+@cli.command("beads-sync")
+@click.option("--task", "-t", help="Sync specific task ID only")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without making changes")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress output (for hooks)")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def beads_sync(
+    ctx: click.Context,
+    task: Optional[str],
+    dry_run: bool,
+    quiet: bool,
+    json_output: bool,
+) -> None:
+    """Sync outcomes for completed Beads tasks.
+
+    Scans completed tasks and auto-records outcomes for linked memories.
+    This is the core of Beads integration - when a task completes,
+    memories that helped solve it get boosted.
+
+    Examples:
+        mem beads-sync                  # Sync all completed tasks
+        mem beads-sync --task bd-a3f8   # Sync specific task
+        mem beads-sync --dry-run        # Preview changes
+    """
+    from memory_layer.tasks import BeadsAdapter, BeadsSyncResult
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    try:
+        engine = get_engine()
+        adapter = BeadsAdapter(engine)
+        run_async(adapter.initialize())
+
+        if not adapter.is_available:
+            if not quiet:
+                if json_output:
+                    click.echo(json.dumps({"error": "Beads not found", "success": False}))
+                else:
+                    click.echo("No .beads/ directory found in project hierarchy.")
+            ctx.exit(1)
+
+        if task:
+            # Sync specific task
+            if dry_run:
+                from memory_layer.tasks import TaskMemoryLinker
+                linker = adapter._linker
+                links = run_async(linker.get_unresolved_links(task))
+                if not quiet:
+                    if json_output:
+                        click.echo(json.dumps({
+                            "task_id": task,
+                            "memories_to_update": len(links),
+                            "dry_run": True,
+                        }))
+                    else:
+                        click.echo(f"Would update {len(links)} memories for task {task}")
+            else:
+                beads_task = adapter.get_task(task)
+                if not beads_task:
+                    if not quiet:
+                        click.echo(f"Task {task} not found")
+                    ctx.exit(1)
+
+                from memory_layer.tasks import BeadsTaskStatus
+                if beads_task.status == BeadsTaskStatus.DONE:
+                    count = run_async(adapter.on_task_done(task))
+                elif beads_task.status == BeadsTaskStatus.CANCELLED:
+                    count = run_async(adapter.on_task_cancelled(task))
+                elif beads_task.status == BeadsTaskStatus.BLOCKED:
+                    count = run_async(adapter.on_task_blocked(task))
+                else:
+                    count = 0
+                    if not quiet:
+                        click.echo(f"Task {task} is {beads_task.status.value}, no outcome to record")
+
+                if not quiet and count > 0:
+                    if json_output:
+                        click.echo(json.dumps({
+                            "task_id": task,
+                            "outcomes_recorded": count,
+                        }))
+                    else:
+                        click.echo(f"Recorded outcomes for {count} memories")
+        else:
+            # Sync all completed tasks
+            result = run_async(adapter.sync())
+
+            if not quiet:
+                if json_output:
+                    click.echo(json.dumps(result.to_dict()))
+                else:
+                    click.echo(f"Tasks found: {result.tasks_found}")
+                    click.echo(f"Tasks synced: {result.tasks_synced}")
+                    click.echo(f"Outcomes recorded: {result.outcomes_recorded}")
+                    if result.errors:
+                        click.echo(f"Errors: {len(result.errors)}")
+                        if verbose:
+                            for err in result.errors:
+                                click.echo(f"  - {err}")
+
+    except Exception as e:
+        if not quiet:
+            click.echo(f"Error: {format_error(e, verbose > 0)}", err=True)
+        ctx.exit(1)
+
+
+@cli.command("beads-context")
+@click.option("--task", "-t", help="Task ID to get context for (default: current)")
+@click.option("--limit", "-l", default=10, help="Max memories to include")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def beads_context(
+    ctx: click.Context,
+    task: Optional[str],
+    limit: int,
+    json_output: bool,
+) -> None:
+    """Get unified context for a Beads task.
+
+    Combines task info with relevant memories for context injection.
+
+    Examples:
+        mem beads-context              # Context for current task
+        mem beads-context -t bd-a3f8   # Context for specific task
+        mem beads-context --json       # Output as JSON
+    """
+    from memory_layer.tasks import BeadsAdapter
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    try:
+        engine = get_engine()
+        adapter = BeadsAdapter(engine)
+        run_async(adapter.initialize())
+
+        if not adapter.is_available:
+            if json_output:
+                click.echo(json.dumps({"error": "Beads not found"}))
+            else:
+                click.echo("No .beads/ directory found in project hierarchy.")
+            ctx.exit(1)
+
+        context = run_async(adapter.get_unified_context(task, limit))
+
+        if not context:
+            if json_output:
+                click.echo(json.dumps({"error": "No task found"}))
+            else:
+                click.echo("No active task found.")
+            ctx.exit(1)
+
+        if json_output:
+            click.echo(json.dumps({
+                "task_id": context.task.id,
+                "task_title": context.task.title,
+                "task_status": context.task.status.value,
+                "memories_count": len(context.memories),
+                "formatted": context.formatted,
+            }))
+        else:
+            click.echo(context.formatted)
+
+    except Exception as e:
+        click.echo(f"Error: {format_error(e, verbose > 0)}", err=True)
+        ctx.exit(1)
+
+
+@cli.command("beads-link")
+@click.argument("memory_id")
+@click.option("--task", "-t", help="Task ID to link to (default: current)")
+@click.option("--context", "-c", help="Context about how memory is used")
+@click.pass_context
+def beads_link(
+    ctx: click.Context,
+    memory_id: str,
+    task: Optional[str],
+    context: Optional[str],
+) -> None:
+    """Link a memory to a Beads task.
+
+    Manually link a memory to a task for outcome tracking.
+    When the task completes, the memory's outcome will be recorded.
+
+    Examples:
+        mem beads-link mem-abc123                    # Link to current task
+        mem beads-link mem-abc123 -t bd-a3f8        # Link to specific task
+        mem beads-link mem-abc123 -c "used for auth"  # With context
+    """
+    from memory_layer.tasks import BeadsAdapter
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    try:
+        engine = get_engine()
+        adapter = BeadsAdapter(engine)
+        run_async(adapter.initialize())
+
+        if not adapter.is_available:
+            click.echo("No .beads/ directory found in project hierarchy.")
+            ctx.exit(1)
+
+        # Get task ID
+        if task:
+            target_task = adapter.get_task(task)
+            if not target_task:
+                click.echo(f"Task {task} not found")
+                ctx.exit(1)
+            task_id = task
+        else:
+            current = adapter.get_current_task()
+            if not current:
+                click.echo("No current task. Use --task to specify a task ID.")
+                ctx.exit(1)
+            task_id = current.id
+
+        # Verify memory exists
+        try:
+            memory = run_async(engine.get(memory_id))
+        except Exception:
+            click.echo(f"Memory {memory_id} not found")
+            ctx.exit(1)
+
+        # Create link
+        run_async(adapter.link_memory_to_task(task_id, memory_id, context))
+        click.echo(f"Linked memory {memory_id} to task {task_id}")
+
+    except Exception as e:
+        click.echo(f"Error: {format_error(e, verbose > 0)}", err=True)
+        ctx.exit(1)
+
+
+@cli.command("beads-stats")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def beads_stats(ctx: click.Context, json_output: bool) -> None:
+    """Show Beads integration statistics.
+
+    Displays info about tasks, links, and sync status.
+
+    Examples:
+        mem beads-stats
+        mem beads-stats --json
+    """
+    from memory_layer.tasks import BeadsAdapter
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    try:
+        engine = get_engine()
+        adapter = BeadsAdapter(engine)
+        run_async(adapter.initialize())
+
+        stats = run_async(adapter.get_stats())
+
+        if json_output:
+            click.echo(json.dumps(stats, indent=2))
+        else:
+            click.echo("Beads Integration Stats")
+            click.echo("=" * 40)
+            click.echo(f"Beads available: {stats['beads_available']}")
+            if stats['beads_dir']:
+                click.echo(f"Beads directory: {stats['beads_dir']}")
+            click.echo()
+
+            if stats['beads_available']:
+                click.echo("Tasks:")
+                click.echo(f"  Total: {stats['tasks']['total_tasks']}")
+                for status, count in stats['tasks']['by_status'].items():
+                    click.echo(f"  {status}: {count}")
+                click.echo()
+
+            click.echo("Task-Memory Links:")
+            click.echo(f"  Total links: {stats['links']['total_links']}")
+            click.echo(f"  Unique tasks: {stats['links']['unique_tasks']}")
+            click.echo(f"  Unique memories: {stats['links']['unique_memories']}")
+            if stats['links']['by_outcome']:
+                click.echo("  By outcome:")
+                for outcome, count in stats['links']['by_outcome'].items():
+                    click.echo(f"    {outcome}: {count}")
+            click.echo()
+
+            click.echo("Configuration:")
+            click.echo(f"  Auto-outcome: {stats['auto_outcome_enabled']}")
+            click.echo(f"  Outcome on cancel: {stats['outcome_on_cancel']}")
+
+    except Exception as e:
+        click.echo(f"Error: {format_error(e, verbose > 0)}", err=True)
+        ctx.exit(1)
+
+
+# =============================================================================
+# Unified Tasks Commands (Phase 7 - Claude Code Tasks Adapter)
+# =============================================================================
+
+
+@cli.command("tasks")
+@click.option("--source", "-s", type=click.Choice(["beads", "claude", "all"]), default="all",
+              help="Task source filter")
+@click.option("--status", type=click.Choice(["pending", "in_progress", "done", "completed", "all"]),
+              default="all", help="Status filter")
+@click.option("--limit", "-l", default=50, help="Maximum number of tasks to show")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def tasks_list(
+    ctx: click.Context,
+    source: str,
+    status: str,
+    limit: int,
+    json_output: bool,
+) -> None:
+    """List tasks from all available sources.
+
+    Shows tasks from both Beads (.beads/) and Claude Code (~/.claude/todos/)
+    with unified formatting.
+
+    Examples:
+        mem tasks                      # List all tasks
+        mem tasks --source claude      # Only Claude Code tasks
+        mem tasks --source beads       # Only Beads tasks
+        mem tasks --status pending     # Only pending tasks
+        mem tasks --json               # Output as JSON
+    """
+    from memory_layer.tasks import UnifiedTaskAdapter, TaskSource
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    try:
+        engine = get_engine()
+        adapter = UnifiedTaskAdapter(engine)
+        run_async(adapter.initialize())
+
+        # Determine source filter
+        source_filter = None
+        if source == "beads":
+            source_filter = TaskSource.BEADS
+        elif source == "claude":
+            source_filter = TaskSource.CLAUDE_CODE
+
+        # Determine status filter
+        status_filter = None if status == "all" else status
+
+        # Get tasks
+        tasks = adapter.list_tasks(source=source_filter, status=status_filter)
+        tasks = tasks[:limit]
+
+        if json_output:
+            output = {
+                "tasks": [t.to_dict() for t in tasks],
+                "total": len(tasks),
+                "sources": [s.value for s in adapter.available_sources],
+            }
+            click.echo(json.dumps(output, indent=2, default=str))
+        else:
+            if not tasks:
+                click.echo("No tasks found.")
+                click.echo(f"Available sources: {[s.value for s in adapter.available_sources]}")
+                return
+
+            click.echo(f"Tasks ({len(tasks)} found)")
+            click.echo("=" * 60)
+
+            for task in tasks:
+                # Status indicator
+                status_icons = {
+                    "pending": "○",
+                    "in_progress": "►",
+                    "done": "✓",
+                    "completed": "✓",
+                    "blocked": "⊘",
+                    "cancelled": "✗",
+                }
+                icon = status_icons.get(task.status, "?")
+
+                # Source tag
+                source_tag = "[B]" if task.source == TaskSource.BEADS else "[C]"
+
+                # Title (truncated)
+                title = task.title[:50] + "..." if len(task.title) > 50 else task.title
+
+                click.echo(f"{icon} {source_tag} {task.id}: {title}")
+
+            click.echo()
+            click.echo(f"Sources: {[s.value for s in adapter.available_sources]}")
+
+    except Exception as e:
+        click.echo(f"Error: {format_error(e, verbose > 0)}", err=True)
+        ctx.exit(1)
+
+
+@cli.command("tasks-sync")
+@click.option("--source", "-s", type=click.Choice(["beads", "claude", "all"]), default="all",
+              help="Task source to sync")
+@click.option("--task", "-t", help="Sync specific task ID only")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def tasks_sync(
+    ctx: click.Context,
+    source: str,
+    task: Optional[str],
+    json_output: bool,
+) -> None:
+    """Sync outcomes for completed tasks from all sources.
+
+    Scans completed tasks and auto-records outcomes for linked memories.
+    Works with both Beads and Claude Code tasks.
+
+    Examples:
+        mem tasks-sync                  # Sync all sources
+        mem tasks-sync --source claude  # Only Claude Code
+        mem tasks-sync --task cc-abc-0  # Sync specific task
+        mem tasks-sync --json           # Output as JSON
+    """
+    from memory_layer.tasks import UnifiedTaskAdapter, TaskSource
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    try:
+        engine = get_engine()
+        adapter = UnifiedTaskAdapter(engine)
+        run_async(adapter.initialize())
+
+        if task:
+            # Sync specific task
+            count = run_async(adapter.on_task_completed(task))
+            if json_output:
+                click.echo(json.dumps({
+                    "task_id": task,
+                    "outcomes_recorded": count,
+                    "success": True,
+                }))
+            else:
+                click.echo(f"Recorded outcomes for {count} memories on task {task}")
+        else:
+            # Sync all or by source
+            source_filter = None
+            if source == "beads":
+                source_filter = TaskSource.BEADS
+            elif source == "claude":
+                source_filter = TaskSource.CLAUDE_CODE
+
+            result = run_async(adapter.sync(source=source_filter))
+
+            if json_output:
+                click.echo(json.dumps(result.to_dict(), indent=2))
+            else:
+                if hasattr(result, 'results'):
+                    # UnifiedSyncResult
+                    click.echo("Task Sync Results")
+                    click.echo("=" * 40)
+                    click.echo(f"Total tasks found: {result.total_tasks_found}")
+                    click.echo(f"Tasks synced: {result.total_tasks_synced}")
+                    click.echo(f"Outcomes recorded: {result.total_outcomes_recorded}")
+                    if result.errors:
+                        click.echo(f"Errors: {len(result.errors)}")
+                        for error in result.errors:
+                            click.echo(f"  - {error}")
+                else:
+                    # Single TaskSyncResult
+                    click.echo(f"Source: {result.source.value}")
+                    click.echo(f"Tasks found: {result.tasks_found}")
+                    click.echo(f"Tasks synced: {result.tasks_synced}")
+                    click.echo(f"Outcomes recorded: {result.outcomes_recorded}")
+
+    except Exception as e:
+        click.echo(f"Error: {format_error(e, verbose > 0)}", err=True)
+        ctx.exit(1)
+
+
+@cli.command("tasks-context")
+@click.option("--task", "-t", help="Task ID to get context for (default: current)")
+@click.option("--source", "-s", type=click.Choice(["beads", "claude"]),
+              help="Task source (auto-detected from ID)")
+@click.option("--limit", "-l", default=10, help="Max memories to include")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def tasks_context(
+    ctx: click.Context,
+    task: Optional[str],
+    source: Optional[str],
+    limit: int,
+    json_output: bool,
+) -> None:
+    """Get unified context for a task from any source.
+
+    Combines task info with relevant memories for context injection.
+
+    Examples:
+        mem tasks-context               # Context for current task
+        mem tasks-context -t cc-abc-0   # Context for Claude Code task
+        mem tasks-context -t bd-a3f8    # Context for Beads task
+        mem tasks-context --json        # Output as JSON
+    """
+    from memory_layer.tasks import UnifiedTaskAdapter, TaskSource
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    try:
+        engine = get_engine()
+        adapter = UnifiedTaskAdapter(engine)
+        run_async(adapter.initialize())
+
+        # Determine source
+        source_filter = None
+        if source == "beads":
+            source_filter = TaskSource.BEADS
+        elif source == "claude":
+            source_filter = TaskSource.CLAUDE_CODE
+
+        context = run_async(adapter.get_unified_context(task, source_filter, limit))
+
+        if not context:
+            if json_output:
+                click.echo(json.dumps({"error": "No task found"}))
+            else:
+                click.echo("No task found.")
+                if not task:
+                    click.echo("Tip: Specify a task ID with --task")
+            ctx.exit(1)
+
+        if json_output:
+            output = {
+                "task": context.task.to_dict(),
+                "source": context.source.value,
+                "memories": len(context.memories),
+                "formatted": context.formatted,
+            }
+            click.echo(json.dumps(output, indent=2, default=str))
+        else:
+            click.echo(context.formatted)
+
+    except Exception as e:
+        click.echo(f"Error: {format_error(e, verbose > 0)}", err=True)
+        ctx.exit(1)
+
+
+@cli.command("tasks-stats")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.pass_context
+def tasks_stats(ctx: click.Context, json_output: bool) -> None:
+    """Show statistics for all task integrations.
+
+    Displays info about Beads and Claude Code tasks, links, and sync status.
+
+    Examples:
+        mem tasks-stats
+        mem tasks-stats --json
+    """
+    from memory_layer.tasks import UnifiedTaskAdapter, TaskSource
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    try:
+        engine = get_engine()
+        adapter = UnifiedTaskAdapter(engine)
+        run_async(adapter.initialize())
+
+        stats = run_async(adapter.get_stats())
+
+        if json_output:
+            click.echo(json.dumps(stats, indent=2))
+        else:
+            click.echo("Task Integration Statistics")
+            click.echo("=" * 50)
+            click.echo()
+            click.echo(f"Available sources: {stats['available_sources']}")
+            click.echo()
+
+            # Beads stats
+            if stats['beads']:
+                beads = stats['beads']
+                click.echo("Beads Integration")
+                click.echo("-" * 30)
+                click.echo(f"  Available: {beads.get('beads_available', False)}")
+                if beads.get('beads_dir'):
+                    click.echo(f"  Directory: {beads['beads_dir']}")
+                if beads.get('tasks'):
+                    click.echo(f"  Total tasks: {beads['tasks'].get('total_tasks', 0)}")
+                    for status, count in beads['tasks'].get('by_status', {}).items():
+                        click.echo(f"    {status}: {count}")
+                click.echo()
+
+            # Claude Code stats
+            if stats['claude_code']:
+                cc = stats['claude_code']
+                click.echo("Claude Code Integration")
+                click.echo("-" * 30)
+                click.echo(f"  Available: {cc.get('claude_code_available', False)}")
+                if cc.get('todos_dir'):
+                    click.echo(f"  Directory: {cc['todos_dir']}")
+                if cc.get('tasks'):
+                    click.echo(f"  Total tasks: {cc['tasks'].get('total_tasks', 0)}")
+                    click.echo(f"  Sessions: {cc['tasks'].get('sessions', 0)}")
+                    for status, count in cc['tasks'].get('by_status', {}).items():
+                        click.echo(f"    {status}: {count}")
+                click.echo()
+
+    except Exception as e:
+        click.echo(f"Error: {format_error(e, verbose > 0)}", err=True)
+        ctx.exit(1)
+
+
+# =============================================================================
 # Entry Point
 # =============================================================================
 
