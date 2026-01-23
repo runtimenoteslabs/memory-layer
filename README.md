@@ -204,27 +204,59 @@ The `mem install-plugin` command creates:
 /memory-context                  # Get project context
 ```
 
-### Beads Task Tracker Integration
+### Task Integration (Beads + Claude Code)
 
-Memory Layer integrates with [Beads](https://github.com/steveyegge/beads) to automatically learn from task outcomes.
+Memory Layer integrates with task trackers to automatically learn from task outcomes.
+
+**Supported sources:**
+- [Beads](https://github.com/steveyegge/beads) - `.beads/` directory
+- Claude Code Tasks - `~/.claude/todos/` directory
 
 **How it works:**
-1. You work on a Beads task, Claude searches for relevant memories
+1. You work on a task, Claude searches for relevant memories
 2. Those memories get linked to your task
 3. When you mark the task done, linked memories are automatically boosted
 
 ```bash
-# Sync outcomes for completed tasks
+# Unified task commands (all sources)
+mem tasks                    # List all tasks
+mem tasks --source beads     # Filter by source
+mem tasks --source claude    # Claude Code tasks only
+mem tasks-sync               # Sync outcomes
+mem tasks-context            # Get task context with memories
+mem tasks-stats              # View statistics
+
+# Legacy Beads-specific commands (still supported)
 mem beads-sync
-
-# See context for current task
 mem beads-context
-
-# View integration stats
 mem beads-stats
 ```
 
-No setup required - Memory Layer auto-detects `.beads/` directories.
+No setup required - Memory Layer auto-detects both `.beads/` and `~/.claude/todos/` directories.
+
+**Environment variables:**
+- `CLAUDE_CODE_TASK_LIST_ID` - Filter to specific task list
+- `CLAUDE_CODE_TODOS_DIR` - Custom todos directory location
+
+### Web UI
+
+Memory Layer includes a web interface for browsing and managing memories.
+
+```bash
+# Start server with Web UI
+mem serve --rest --port 8080
+
+# Open http://localhost:8080
+```
+
+**Features:**
+- Dashboard with category statistics
+- Memory list with filtering and search
+- Semantic and keyword search modes
+- Task viewer (Beads + Claude Code)
+- Add/edit memories
+- Record outcomes
+- Light/dark theme
 
 ## Memory Categories
 
@@ -295,6 +327,10 @@ After 12 weeks of use:
 |----------|-------------|---------|
 | `ANTHROPIC_API_KEY` | For LLM-based extraction | Required for extraction features |
 | `MEMORY_LAYER_DB` | Database location | `~/.memory-layer/memories.db` |
+| `MEMORY_LAYER_ENV` | Environment (development/testing/production) | development |
+| `MEMORY_LAYER_LOG_LEVEL` | Logging level | WARNING |
+| `CLAUDE_CODE_TASK_LIST_ID` | Filter Claude Code tasks | None |
+| `CLAUDE_CODE_TODOS_DIR` | Custom todos directory | `~/.claude/todos/` |
 
 ### Data Location
 
@@ -308,9 +344,10 @@ After 12 weeks of use:
 ```
 memory-layer/
 ├── src/memory_layer/
-│   ├── core/           # Storage, retrieval, models
+│   ├── core/           # Storage, retrieval, models, config, resilience
 │   ├── extraction/     # LLM-based memory extraction
-│   ├── server/         # MCP and REST API servers
+│   ├── server/         # MCP server, REST API, Web UI
+│   ├── tasks/          # Task integration (Beads, Claude Code)
 │   ├── cli/            # Command-line interface
 │   └── sdk/            # Python SDK
 └── tests/
@@ -318,6 +355,20 @@ memory-layer/
     ├── integration/
     └── ...
 ```
+
+## Security
+
+Memory Layer is designed for local, single-user use:
+
+- **Local storage**: All data stored in `~/.memory-layer/` (SQLite database)
+- **No external transmission**: Memories never leave your machine (except for LLM extraction if enabled)
+- **Parameterized queries**: All database operations use parameterized SQL (no injection risk)
+- **Input validation**: Pydantic models validate all API inputs
+- **Server binding**: REST API binds to `127.0.0.1` by default (localhost only)
+
+**API Keys**: If using LLM extraction features, set `ANTHROPIC_API_KEY` as an environment variable. Never commit API keys to version control.
+
+**Multi-user warning**: The REST API and MCP server are not designed for multi-user/production deployment. For shared use, deploy behind an authentication proxy.
 
 ## Development
 

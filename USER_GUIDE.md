@@ -225,58 +225,98 @@ mem check
 
 ---
 
-## Beads Integration
+## Task Integration
 
-If you use [Beads](https://github.com/steveyegge/beads) for task tracking, Memory Layer can automatically learn from your task outcomes.
+Memory Layer integrates with task trackers to automatically learn from task outcomes.
+
+### Supported Task Sources
+
+| Source | Location | Auto-detected |
+|--------|----------|---------------|
+| [Beads](https://github.com/steveyegge/beads) | `.beads/` in project | Yes |
+| Claude Code Tasks | `~/.claude/todos/` | Yes |
 
 ### How It Works
 
-1. When you work on a Beads task, Claude searches for relevant memories
+1. When you work on a task, Claude searches for relevant memories
 2. Those memories get linked to your task
 3. When you mark the task as done, the memories that helped are automatically boosted
 
 ```
-Task "bd-a3f8" marked "done"
+Task completed
     → Memories used during this task get +0.2 boost
     → Good advice rises to the top over time
 ```
 
-### Setup
-
-No additional setup needed. Memory Layer detects Beads automatically if you have a `.beads/` directory in your project.
-
-### CLI Commands
+### Unified Task Commands
 
 ```bash
-# Sync outcomes for all completed tasks
-mem beads-sync
+# List tasks from all sources
+mem tasks
 
-# Sync a specific task
-mem beads-sync --task bd-a3f8
+# Filter by source
+mem tasks --source beads      # Beads tasks only
+mem tasks --source claude     # Claude Code tasks only
 
-# See task context with relevant memories
-mem beads-context
+# Sync outcomes for completed tasks
+mem tasks-sync
 
-# Link a memory to current task
-mem beads-link <memory_id>
+# Get context with relevant memories
+mem tasks-context
 
-# View Beads integration stats
-mem beads-stats
+# View statistics
+mem tasks-stats
 ```
 
-### Automatic vs Manual
+### Legacy Beads Commands (Still Supported)
 
-**Automatic (recommended):** Just use Beads normally. When tasks complete, outcomes are recorded automatically on next sync.
-
-**Manual:** If you want explicit control, disable auto-outcome and use `mem beads-sync` manually.
+```bash
+mem beads-sync
+mem beads-context
+mem beads-stats
+mem beads-link <memory_id>
+```
 
 ### What Gets Recorded
 
 | Task Status | Memory Outcome | Score Change |
 |-------------|----------------|--------------|
-| `done` | worked | +0.2 |
-| `cancelled` | failed (if enabled) | -0.3 |
-| `blocked` | partial | +0.05 |
+| completed/done | worked | +0.2 |
+| cancelled | failed (if enabled) | -0.3 |
+| blocked | partial | +0.05 |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `CLAUDE_CODE_TASK_LIST_ID` | Filter to specific task list |
+| `CLAUDE_CODE_TODOS_DIR` | Custom todos directory |
+
+---
+
+## Web UI
+
+Memory Layer includes a web interface for browsing and managing memories.
+
+### Starting the Web UI
+
+```bash
+# Start the server
+mem serve --rest --port 8080
+
+# Open in browser
+# http://localhost:8080
+```
+
+### Features
+
+- **Dashboard**: Statistics with color-coded category bars
+- **Memories**: Sortable list with filters (category, project, search)
+- **Search**: Semantic (related concepts) or Keyword (exact match) modes
+- **Tasks**: View tasks from Beads and Claude Code with context
+- **Add Memory**: Form with category selection
+- **Outcomes**: Record feedback on memories
+- **Theme**: Light/dark mode toggle
 
 ---
 

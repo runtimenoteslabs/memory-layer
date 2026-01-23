@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memory-layer"
-version = "2.0.0"
+version = "2.1.0"
 description = "Persistent memory for AI coding agents with outcome-based learning"
 readme = "README.md"
 license = "MIT"
