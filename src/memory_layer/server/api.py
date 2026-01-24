@@ -1443,6 +1443,62 @@ async def list_tasks(
     )
 
 
+@router.get("/tasks/stats", response_model=TasksStatsResponse, tags=["Tasks"])
+async def get_tasks_stats(
+    adapter = Depends(get_unified_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get statistics for all task integrations."""
+    stats = await adapter.get_stats()
+    return TasksStatsResponse(
+        available_sources=stats.get("available_sources", []),
+        beads=stats.get("beads", {}),
+        claude_code=stats.get("claude_code", {}),
+    )
+
+
+@router.get("/tasks/context", response_model=TasksContextResponse, tags=["Tasks"])
+async def get_tasks_context(
+    task_id: Optional[str] = Query(None, description="Task ID (uses current if not provided)"),
+    source: Optional[str] = Query(None, description="Source: beads, claude_code"),
+    limit: int = Query(10, ge=1, le=50, description="Max memories to include"),
+    adapter = Depends(get_unified_adapter),
+    _: Optional[str] = Depends(verify_api_key),
+):
+    """Get unified context combining task info and relevant memories."""
+    from memory_layer.tasks import TaskSource
+
+    # Parse source filter
+    source_filter = None
+    if source:
+        try:
+            source_filter = TaskSource(source)
+        except ValueError:
+            return TasksContextResponse(
+                success=False,
+                error=f"Invalid source: {source}",
+            )
+
+    context = await adapter.get_unified_context(task_id, source_filter, limit)
+
+    if not context:
+        return TasksContextResponse(
+            success=False,
+            error="No task found",
+        )
+
+    return TasksContextResponse(
+        success=True,
+        task_id=context.task.id,
+        task_title=context.task.title,
+        task_status=context.task.status.value,
+        task_description=context.task.description if hasattr(context.task, 'description') else context.task.content,
+        source=context.source.value,
+        memories_count=len(context.memories),
+        formatted=context.formatted,
+    )
+
+
 @router.get("/tasks/{task_id}", response_model=TaskResponse, tags=["Tasks"])
 async def get_task(
     task_id: str,
@@ -1526,48 +1582,6 @@ async def sync_tasks(
         )
 
 
-@router.get("/tasks/context", response_model=TasksContextResponse, tags=["Tasks"])
-async def get_tasks_context(
-    task_id: Optional[str] = Query(None, description="Task ID (uses current if not provided)"),
-    source: Optional[str] = Query(None, description="Source: beads, claude_code"),
-    limit: int = Query(10, ge=1, le=50, description="Max memories to include"),
-    adapter = Depends(get_unified_adapter),
-    _: Optional[str] = Depends(verify_api_key),
-):
-    """Get unified context combining task info and relevant memories."""
-    from memory_layer.tasks import TaskSource
-
-    # Parse source filter
-    source_filter = None
-    if source:
-        try:
-            source_filter = TaskSource(source)
-        except ValueError:
-            return TasksContextResponse(
-                success=False,
-                error=f"Invalid source: {source}",
-            )
-
-    context = await adapter.get_unified_context(task_id, source_filter, limit)
-
-    if not context:
-        return TasksContextResponse(
-            success=False,
-            error="No task found",
-        )
-
-    return TasksContextResponse(
-        success=True,
-        task_id=context.task.id,
-        task_title=context.task.title,
-        task_status=context.task.status.value,
-        task_description=context.task.description if hasattr(context.task, 'description') else context.task.content,
-        source=context.source.value,
-        memories_count=len(context.memories),
-        formatted=context.formatted,
-    )
-
-
 @router.get("/tasks/{task_id}/memories", tags=["Tasks"])
 async def get_task_memories(
     task_id: str,
@@ -1599,20 +1613,6 @@ async def get_task_memories(
             for m in memories
         ],
     }
-
-
-@router.get("/tasks/stats", response_model=TasksStatsResponse, tags=["Tasks"])
-async def get_tasks_stats(
-    adapter = Depends(get_unified_adapter),
-    _: Optional[str] = Depends(verify_api_key),
-):
-    """Get statistics for all task integrations."""
-    stats = await adapter.get_stats()
-    return TasksStatsResponse(
-        available_sources=stats.get("available_sources", []),
-        beads=stats.get("beads", {}),
-        claude_code=stats.get("claude_code", {}),
-    )
 
 
 # =============================================================================

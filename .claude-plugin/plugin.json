@@ -1,11 +1,10 @@
 {
   "name": "memory-layer",
-  "description": "Persistent memory with outcome-based learning for AI coding agents. Automatically extracts learnings from sessions, retrieves relevant context, and gets smarter over time based on what actually works.",
-  "version": "2.0.0",
-  "author": "memory-layer-contributors",
+  "description": "Persistent memory with outcome-based learning for AI coding agents. Stores knowledge from coding sessions, learns which memories actually help, and gets smarter over time.",
+  "version": "2.1.0",
+  "author": "runtimenoteslabs",
   "license": "MIT",
-  "repository": "https://github.com/memory-layer/memory-layer",
-  "homepage": "https://memory-layer.dev",
+  "repository": "https://github.com/runtimenoteslabs/memory-layer",
   "keywords": [
     "memory",
     "learning",
@@ -16,7 +15,7 @@
     "ai-agent"
   ],
   "engines": {
-    "claude-code": ">=2.0.0"
+    "claude-code": ">=2.1.0"
   },
   "dependencies": {
     "python": ">=3.10"
