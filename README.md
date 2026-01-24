@@ -392,15 +392,16 @@ MIT
 
 Memory Layer was inspired by studying 11 existing AI memory systems:
 
-- **claude-mem** - UX patterns, progressive disclosure, one-command install
-- **Claude Diary** - Reflection synthesis, minimal viable memory
+- [claude-mem](https://github.com/thedotmack/claude-mem) - UX patterns, progressive disclosure, web viewer
+- [Claude Diary](https://github.com/rlancemartin/claude-diary) - Reflection synthesis, minimal viable memory
 - [Mem0](https://github.com/mem0ai/mem0) - Hybrid storage patterns, community building
-- **OpenMemory** - Local-first approach
-- [Graphiti/Zep](https://github.com/getzep/graphiti) - Temporal modeling research
-- [CORE](https://github.com/redplanethq/core) - Knowledge graph architecture
-- **Supermemory** - Relationship types, temporal decay
-- [Memvid](https://github.com/memvid/memvid) - Single-file portability
-- [Beads](https://github.com/steveyegge/beads) - Task integration concepts
-- **Roampal** - Validated outcome-based learning approach
+- [Graphiti/Zep](https://github.com/getzep/graphiti) - Bi-temporal modeling, research-grade benchmarks
+- [CORE](https://github.com/RedPlanetHQ/core) - Knowledge graph architecture, temporal modeling
+- [Supermemory](https://github.com/supermemoryai/supermemory) - Relationship types, temporal decay
+- [Memvid](https://github.com/memvid/memvid) - Single-file portability, embedded WAL
+- [Beads](https://github.com/steveyegge/beads) - Task integration, git-native tracking
+- [Roampal](https://github.com/roampal-ai/roampal) - Independent validation of outcome-based learning
+
+And thank you to Anthropic for CLAUDE.md - the right foundation for project memory.
 
 The key insight: none of these systems learn from outcomes. Memory Layer adds a feedback loop so memories that actually help rise to the top.
