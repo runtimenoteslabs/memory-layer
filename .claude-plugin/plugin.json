@@ -1,7 +1,7 @@
 {
   "name": "memory-layer",
   "description": "Persistent memory with outcome-based learning for AI coding agents. Stores knowledge from coding sessions, learns which memories actually help, and gets smarter over time.",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "author": "runtimenoteslabs",
   "license": "MIT",
   "repository": "https://github.com/runtimenoteslabs/memory-layer",

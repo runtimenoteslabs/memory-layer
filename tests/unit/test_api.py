@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from memory_layer import __version__
 from memory_layer.core.models import (
     Memory,
     MemoryCategory,
@@ -419,7 +420,7 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        assert data["version"] == "2.0.0"
+        assert data["version"] == __version__
         assert "timestamp" in data
 
 
@@ -1033,7 +1034,7 @@ class TestCreateApp:
 
         app = create_app()
         assert app.title == "Memory Layer API"
-        assert app.version == "2.0.0"
+        assert app.version == __version__
 
     def test_create_app_with_config(self, mock_engine):
         """Test creating app with config."""

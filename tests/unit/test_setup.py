@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,9 @@ class TestProjectSetup:
         """Test that the main package can be imported."""
         import memory_layer
 
-        assert memory_layer.__version__ == "2.0.0"
+        # Assert a valid semver string rather than a literal, so version
+        # bumps don't break this test (version is sourced from __init__.py).
+        assert re.match(r"^\d+\.\d+\.\d+", memory_layer.__version__)
         assert memory_layer.__author__ == "Memory Layer Team"
 
     def test_core_import(self) -> None:

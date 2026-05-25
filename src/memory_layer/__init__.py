@@ -10,7 +10,7 @@ This package provides:
 
 from __future__ import annotations
 
-__version__ = "2.0.0"
+__version__ = "2.1.1"
 __author__ = "Memory Layer Team"
 
 from memory_layer.core.logging import get_logger, setup_logging

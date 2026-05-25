@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memory-layer"
-version = "2.1.0"
+dynamic = ["version"]
 description = "Persistent memory for AI coding agents with outcome-based learning"
 readme = "README.md"
 license = "MIT"
@@ -86,6 +86,9 @@ Homepage = "https://github.com/runtimenoteslabs/memory-layer"
 Documentation = "https://github.com/runtimenoteslabs/memory-layer#readme"
 Repository = "https://github.com/runtimenoteslabs/memory-layer"
 Issues = "https://github.com/runtimenoteslabs/memory-layer/issues"
+
+[tool.hatch.version]
+path = "src/memory_layer/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memory_layer"]

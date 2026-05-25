@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Coroutine, Optional
 
+from memory_layer import __version__
 from memory_layer.core.engine import MemoryEngine
 from memory_layer.core.logging import get_logger
 from memory_layer.core.models import (
@@ -801,7 +802,7 @@ class MCPServer:
             },
             "serverInfo": {
                 "name": "memory-layer",
-                "version": "2.0.0",
+                "version": __version__,
             },
         }
 

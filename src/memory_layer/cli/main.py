@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 import click
 
+from memory_layer import __version__
 from memory_layer.core.logging import get_logger, setup_logging
 from memory_layer.core.models import MemoryCategory, MemoryScope, MemorySource, Outcome
 
@@ -106,7 +107,7 @@ def format_error(error: Exception, verbose: bool = False) -> str:
 
 
 @click.group()
-@click.version_option(version="2.0.0", prog_name="Memory Layer")
+@click.version_option(version=__version__, prog_name="Memory Layer")
 @click.option("--verbose", "-v", count=True, help="Increase verbosity (-v for INFO, -vv for DEBUG)")
 @click.option("--json-output", is_flag=True, help="Output in JSON format")
 @click.pass_context
@@ -981,7 +982,7 @@ SETTINGS_JSON = """{
 PLUGIN_JSON = """{
   "name": "memory-layer",
   "description": "Persistent memory with outcome-based learning for AI coding agents.",
-  "version": "2.0.0",
+  "version": "__VERSION__",
   "author": "memory-layer-contributors",
   "license": "MIT",
   "capabilities": {
@@ -1274,7 +1275,7 @@ def install_plugin(ctx: click.Context, force: bool) -> None:
             skipped += 1
             click.echo(f"  Skipped (exists): {filepath.relative_to(cwd)}")
         else:
-            filepath.write_text(content.strip() + "\n")
+            filepath.write_text(content.strip().replace("__VERSION__", __version__) + "\n")
             created += 1
             click.echo(f"  Created: {filepath.relative_to(cwd)}")
 

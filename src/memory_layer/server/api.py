@@ -28,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from memory_layer import __version__
 from memory_layer.core.engine import MemoryEngine
 from memory_layer.core.logging import get_logger
 from memory_layer.core.models import (
@@ -496,7 +497,7 @@ def create_app(
     app = FastAPI(
         title="Memory Layer API",
         description="REST API for Memory Layer - Persistent memory for AI coding agents",
-        version="2.0.0",
+        version=__version__,
         docs_url="/docs",
         redoc_url="/redoc",
     )
@@ -603,7 +604,7 @@ async def health_check(
 
     return HealthResponse(
         status="healthy" if overall_healthy else "unhealthy",
-        version="2.0.0",
+        version=__version__,
         timestamp=datetime.now(timezone.utc),
         checks=checks,
     )
