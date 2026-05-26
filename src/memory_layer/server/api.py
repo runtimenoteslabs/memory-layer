@@ -75,7 +75,7 @@ class MemoryCreateRequest(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    content: str = Field(..., min_length=1, max_length=10000)
+    content: str = Field(..., min_length=1, max_length=100000)
     category: MemoryCategory = MemoryCategory.GENERAL
     project: Optional[str] = Field(default=None, max_length=255)
     tags: list[str] = Field(default_factory=list, max_length=20)
@@ -95,7 +95,7 @@ class MemoryUpdateRequest(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    content: Optional[str] = Field(default=None, min_length=1, max_length=10000)
+    content: Optional[str] = Field(default=None, min_length=1, max_length=100000)
     category: Optional[MemoryCategory] = None
     tags: Optional[list[str]] = Field(default=None, max_length=20)
     importance: Optional[float] = Field(default=None, ge=0.0, le=1.0)

@@ -728,8 +728,8 @@ class MemoryCreate(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    content: str = Field(..., min_length=1, max_length=10000)
-    """The memory content (required, 1-10000 chars)."""
+    content: str = Field(..., min_length=1, max_length=100000)
+    """The memory content (required, 1-100000 chars)."""
 
     category: MemoryCategory
     """Classification category (required)."""
@@ -801,8 +801,8 @@ class MemoryUpdate(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    content: str | None = Field(default=None, min_length=1, max_length=10000)
-    """New content (optional)."""
+    content: str | None = Field(default=None, min_length=1, max_length=100000)
+    """New content (optional, 1-100000 chars)."""
 
     category: MemoryCategory | None = None
     """New category (optional)."""

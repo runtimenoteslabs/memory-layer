@@ -718,12 +718,12 @@ class TestEdgeCases:
         assert retrieved.content == memory.content
 
     async def test_large_content(self, storage: MemoryStorage) -> None:
-        """Test handling large content."""
-        large_content = "x" * 10000
+        """Test handling large content at the new 100k boundary."""
+        large_content = "x" * 100000
         memory = Memory(content=large_content, category=MemoryCategory.DECISION)
         await storage.create(memory)
         retrieved = await storage.get(memory.id)
-        assert len(retrieved.content) == 10000
+        assert len(retrieved.content) == 100000
 
     async def test_null_project(self, storage: MemoryStorage) -> None:
         """Test handling null project."""
