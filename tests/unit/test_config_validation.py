@@ -462,16 +462,15 @@ class TestMcpJsonValidation:
         assert server.get("command") == "mem"
         assert "serve" in server.get("args", [])
 
-    def test_mcp_has_required_tools(self, mcp_file_path: Path):
-        """Test that MCP server declares required tools."""
-        if not mcp_file_path.exists():
-            pytest.skip(".mcp.json not found")
+    def test_mcp_has_required_tools(self):
+        """Test that the MCP server registers the required tools at runtime.
 
-        data = load_json_file(mcp_file_path)
-        server = data.get("mcpServers", {}).get("memory-layer", {})
-        tools = server.get("tools", [])
+        MCP servers register tools at runtime via the protocol, not via a static
+        list in .mcp.json. This test inspects the server's TOOL_SCHEMAS registry.
+        """
+        from memory_layer.server.mcp import TOOL_SCHEMAS
 
-        tool_names = {t["name"] for t in tools}
+        tool_names = {schema.name for schema in TOOL_SCHEMAS}
         required_tools = {"search_memories", "add_memory", "record_outcome", "get_context"}
 
         assert required_tools.issubset(tool_names), f"Missing tools: {required_tools - tool_names}"
