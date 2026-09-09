@@ -2,7 +2,7 @@
 
 Persistent memory for AI coding agents with outcome-based learning.
 
-> **New to Memory Layer?** See the [User Guide](USER_GUIDE.md) for a simple introduction to using Memory Layer with Claude Code.
+> **New to Memory Layer?** See the [User Guide](USER_GUIDE.md) for an introduction to using Memory Layer with Claude Code.
 
 ## What It Does
 
@@ -238,6 +238,24 @@ No setup required - Memory Layer auto-detects both `.beads/` and `~/.claude/todo
 - `CLAUDE_CODE_TASK_LIST_ID` - Filter to specific task list
 - `CLAUDE_CODE_TODOS_DIR` - Custom todos directory location
 
+### Hermes Agent Integration
+
+Memory Layer can serve as Hermes Agent's memory provider, replacing its capped
+note file with retrieval over the same store Claude Code and MCP clients use.
+
+```bash
+# Install into the environment Hermes runs in
+~/.hermes/hermes-agent/venv/bin/python -m pip install \
+    git+https://github.com/runtimenoteslabs/memory-layer.git
+
+hermes config set memory.provider memorylayer
+```
+
+Hermes finds the provider through the `hermes_agent.memory_providers` entry
+point, so you do not edit its code or config files by hand. See
+[docs/hermes.md](docs/hermes.md) for configuration, the tool surface, and the
+evaluation trace format.
+
 ### Web UI
 
 Memory Layer includes a web interface for browsing and managing memories.
@@ -294,7 +312,8 @@ Memory Layer uses a 5-signal hybrid retrieval system that combines multiple rele
 | Frequency | 15% | Frequently used memories rise |
 | Confidence | 10% | Extraction confidence score |
 
-This hybrid approach outperforms pure vector search by incorporating learned effectiveness and usage patterns.
+Two of the five signals, outcome and frequency, come from how memories have
+performed rather than from the query, so ranking changes as feedback accumulates.
 
 ### Category Boosting
 

@@ -1,0 +1,7 @@
+name: memorylayer
+version: 1.0.0
+description: "Memory Layer - local SQLite memory with hybrid retrieval and outcome-based learning, shared across Claude Code, MCP clients and Hermes."
+pip_dependencies: []
+requires_env: []
+hooks:
+  - on_session_end

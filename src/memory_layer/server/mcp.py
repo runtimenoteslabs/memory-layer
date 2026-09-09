@@ -724,18 +724,21 @@ class MCPServer:
             "tasks_stats": self._handle_tasks_stats,
         }
 
-    def _ensure_engine(self) -> MemoryEngine:
-        """Get or create the engine."""
+    async def _ensure_engine(self) -> MemoryEngine:
+        """Get or create (and initialize) the engine."""
         if self.engine is None:
             import os
             from pathlib import Path
+
+            from memory_layer.core.engine import EngineConfig
 
             db_path = os.environ.get(
                 "MEMORY_LAYER_DB",
                 str(Path.home() / ".memory-layer" / "memories.db"),
             )
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            self.engine = MemoryEngine(db_path=db_path)
+            self.engine = MemoryEngine(config=EngineConfig(db_path=db_path))
+            await self.engine.initialize()
         return self.engine
 
     async def handle_request(self, request: MCPRequest) -> MCPResponse:
@@ -847,7 +850,7 @@ class MCPServer:
         self, args: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle search_memories tool."""
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
 
         # Validate inputs
         query = validate_string(args.get("query"), "query", min_length=1)
@@ -895,7 +898,7 @@ class MCPServer:
 
     async def _handle_add_memory(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle add_memory tool."""
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
 
         # Validate inputs
         content = validate_string(args.get("content"), "content", min_length=1)
@@ -933,7 +936,7 @@ class MCPServer:
         self, args: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle record_outcome tool."""
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
 
         # Validate inputs
         memory_ids = validate_list(
@@ -962,7 +965,7 @@ class MCPServer:
 
     async def _handle_get_context(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle get_context tool."""
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
 
         # Validate inputs
         project = validate_string(args.get("project"), "project", required=False)
@@ -1000,7 +1003,7 @@ class MCPServer:
         self, args: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle update_memory tool."""
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
 
         # Validate inputs
         memory_id = validate_string(args.get("id"), "id", min_length=1)
@@ -1041,7 +1044,7 @@ class MCPServer:
         """Handle delete_memory tool."""
         from memory_layer.core.engine import MemoryNotFoundError
 
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
 
         # Validate inputs
         memory_id = validate_string(args.get("id"), "id", min_length=1)
@@ -1062,7 +1065,7 @@ class MCPServer:
         self, args: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle list_memories tool."""
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
 
         # Validate inputs
         category = validate_enum(
@@ -1100,7 +1103,7 @@ class MCPServer:
 
     async def _handle_get_stats(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle get_stats tool."""
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
 
         # Validate inputs
         project = validate_string(args.get("project"), "project", required=False)
@@ -1114,17 +1117,17 @@ class MCPServer:
     # Beads Integration Handlers
     # -------------------------------------------------------------------------
 
-    def _get_beads_adapter(self):
+    async def _get_beads_adapter(self):
         """Get or create the Beads adapter."""
         if not hasattr(self, "_beads_adapter"):
             from memory_layer.tasks import BeadsAdapter
-            engine = self._ensure_engine()
+            engine = await self._ensure_engine()
             self._beads_adapter = BeadsAdapter(engine)
         return self._beads_adapter
 
     async def _ensure_beads_initialized(self):
         """Ensure Beads adapter is initialized."""
-        adapter = self._get_beads_adapter()
+        adapter = await self._get_beads_adapter()
         if not adapter._initialized:
             await adapter.initialize()
         return adapter
@@ -1240,7 +1243,7 @@ class MCPServer:
             task_id = task.id
 
         # Verify memory exists
-        engine = self._ensure_engine()
+        engine = await self._ensure_engine()
         try:
             await engine.get(memory_id)
         except Exception:
@@ -1300,17 +1303,17 @@ class MCPServer:
     # Unified Tasks Handlers (Phase 7 - Claude Code Tasks Adapter)
     # -------------------------------------------------------------------------
 
-    def _get_unified_adapter(self):
+    async def _get_unified_adapter(self):
         """Get or create the unified task adapter."""
         if not hasattr(self, "_unified_adapter"):
             from memory_layer.tasks import UnifiedTaskAdapter
-            engine = self._ensure_engine()
+            engine = await self._ensure_engine()
             self._unified_adapter = UnifiedTaskAdapter(engine)
         return self._unified_adapter
 
     async def _ensure_unified_initialized(self):
         """Ensure unified adapter is initialized."""
-        adapter = self._get_unified_adapter()
+        adapter = await self._get_unified_adapter()
         if not adapter._initialized:
             await adapter.initialize()
         return adapter

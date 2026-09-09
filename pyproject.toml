@@ -81,6 +81,14 @@ dev = [
 [project.scripts]
 mem = "memory_layer.cli.main:cli"
 
+# Hermes Agent discovers memory providers through this group, so installing
+# memory-layer into a Hermes environment is enough to make it selectable with
+# `hermes config set memory.provider memorylayer`. The value must resolve to a
+# package: Hermes reads a provider's directory without importing it, and a bare
+# module has nowhere for the sibling plugin.yaml to live.
+[project.entry-points."hermes_agent.memory_providers"]
+memorylayer = "memory_layer.hermes"
+
 [project.urls]
 Homepage = "https://github.com/runtimenoteslabs/memory-layer"
 Documentation = "https://github.com/runtimenoteslabs/memory-layer#readme"
@@ -141,6 +149,15 @@ ignore = [
     "PLR0913", # too many arguments
     "PLR2004", # magic value comparison
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# The Hermes plugin surface is shaped by Hermes, not by us: optional lifecycle
+# hooks are concrete no-ops rather than abstract methods, and handlers must keep
+# the full contract signature whether or not they read every argument.
+"src/memory_layer/hermes/_base.py" = ["ARG002", "B027"]
+"src/memory_layer/hermes/provider.py" = ["ARG002"]
+"src/memory_layer/hermes/tools.py" = ["ARG001"]
+"tests/unit/test_hermes_provider.py" = ["ARG001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["memory_layer"]

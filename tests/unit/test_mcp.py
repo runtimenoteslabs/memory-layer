@@ -1137,3 +1137,75 @@ class TestUnknownTool:
 
         assert response.error is not None
         assert "unknown" in response.error.message.lower()
+
+
+# =============================================================================
+# Lazy Engine Construction Tests
+# =============================================================================
+
+
+class TestEnsureEngine:
+    """Tests for lazy engine construction in ``_ensure_engine``.
+
+    Every other handler test injects a ready-made engine, so the branch that
+    builds one from scratch went unexercised. It was broken: the engine was
+    constructed with an unsupported ``db_path=`` keyword and never initialized,
+    so ``mem serve --mcp`` listed its tools but failed every call with
+    ``MemoryEngine.__init__() got an unexpected keyword argument 'db_path'``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_builds_and_initializes_engine(self, tmp_path, monkeypatch):
+        """Engine is built from an EngineConfig and initialized before use."""
+        db_path = tmp_path / "nested" / "memories.db"
+        monkeypatch.setenv("MEMORY_LAYER_DB", str(db_path))
+
+        server = MCPServer()
+        built = MagicMock()
+        built.initialize = AsyncMock()
+
+        with patch(
+            "memory_layer.server.mcp.MemoryEngine", return_value=built
+        ) as engine_cls:
+            engine = await server._ensure_engine()
+
+        assert engine is built
+        built.initialize.assert_awaited_once()
+
+        # Constructed via EngineConfig, not a bare db_path keyword.
+        _, kwargs = engine_cls.call_args
+        assert "db_path" not in kwargs
+        assert str(kwargs["config"].db_path) == str(db_path)
+
+        # Parent directory is created so SQLite can open the file.
+        assert db_path.parent.is_dir()
+
+    @pytest.mark.asyncio
+    async def test_engine_is_cached(self, tmp_path, monkeypatch):
+        """The engine is built and initialized once, then reused."""
+        monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "memories.db"))
+
+        server = MCPServer()
+        built = MagicMock()
+        built.initialize = AsyncMock()
+
+        with patch(
+            "memory_layer.server.mcp.MemoryEngine", return_value=built
+        ) as engine_cls:
+            first = await server._ensure_engine()
+            second = await server._ensure_engine()
+
+        assert first is second
+        assert engine_cls.call_count == 1
+        built.initialize.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_injected_engine_is_not_rebuilt(self, mock_engine):
+        """An engine passed to the constructor is used as-is."""
+        server = MCPServer(engine=mock_engine)
+
+        with patch("memory_layer.server.mcp.MemoryEngine") as engine_cls:
+            engine = await server._ensure_engine()
+
+        assert engine is mock_engine
+        engine_cls.assert_not_called()
