@@ -15,6 +15,8 @@ from typing import Any
 
 import pytest
 
+from memory_layer import __version__
+
 # Get the project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -366,14 +368,24 @@ class TestPluginJsonValidation:
         assert "name" in data
         assert data["name"] == "memory-layer"
 
-    def test_plugin_version_is_2x(self, plugin_file_path: Path):
-        """Test that plugin version is 2.x."""
+    def test_plugin_version_matches_package(self, plugin_file_path: Path):
+        """Test that plugin.json declares the package version.
+
+        This file is JSON, so it cannot import ``__version__`` the way every
+        other version string does; it is maintained by hand and has drifted
+        before (fixed in v2.1.1). A prefix check passes at any 2.x, so it could
+        never catch that. Compare against the real version instead.
+        """
         if not plugin_file_path.exists():
             pytest.skip("plugin.json not found")
 
         data = load_json_file(plugin_file_path)
+
         assert "version" in data
-        assert data["version"].startswith("2.")
+        assert data["version"] == __version__, (
+            f"plugin.json says {data['version']}, package says {__version__}. "
+            f"Bump .claude-plugin/plugin.json to match."
+        )
 
     def test_plugin_has_all_capabilities(self, plugin_file_path: Path):
         """Test that plugin declares all required capabilities."""

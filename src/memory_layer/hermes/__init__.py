@@ -4,7 +4,7 @@ Hermes finds this package through the ``hermes_agent.memory_providers`` entry
 point declared in ``pyproject.toml``, so installing memory-layer into the Hermes
 environment is enough to make it selectable:
 
-    pip install memory-layer
+    pip install git+https://github.com/runtimenoteslabs/memory-layer.git
     hermes config set memory.provider memorylayer
 
 See ``docs/hermes.md`` for configuration and the trace format.

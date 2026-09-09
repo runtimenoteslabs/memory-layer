@@ -3,20 +3,19 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "memory-layer"
+name = "memory-layer-ai"
 dynamic = ["version"]
 description = "Persistent memory for AI coding agents with outcome-based learning"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "Memory Layer Team" }
+    { name = "exitcode42" }
 ]
 keywords = ["ai", "memory", "coding-agents", "mcp", "claude"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -57,15 +56,15 @@ server = [
 
 # Full installation - everything
 all = [
-    "memory-layer[embedding,extraction,server]",
+    "memory-layer-ai[embedding,extraction,server]",
 ]
 
 # Legacy aliases for backward compatibility
 phase1 = [
-    "memory-layer[embedding,extraction]",
+    "memory-layer-ai[embedding,extraction]",
 ]
 phase2 = [
-    "memory-layer[server]",
+    "memory-layer-ai[server]",
 ]
 dev = [
     "pytest>=7.4.0",
@@ -81,8 +80,8 @@ dev = [
 [project.scripts]
 mem = "memory_layer.cli.main:cli"
 
-# Hermes Agent discovers memory providers through this group, so installing
-# memory-layer into a Hermes environment is enough to make it selectable with
+# Hermes Agent discovers memory providers through this group, so installing this
+# package into a Hermes environment is enough to make it selectable with
 # `hermes config set memory.provider memorylayer`. The value must resolve to a
 # package: Hermes reads a provider's directory without importing it, and a bare
 # module has nowhere for the sibling plugin.yaml to live.
@@ -94,6 +93,7 @@ Homepage = "https://github.com/runtimenoteslabs/memory-layer"
 Documentation = "https://github.com/runtimenoteslabs/memory-layer#readme"
 Repository = "https://github.com/runtimenoteslabs/memory-layer"
 Issues = "https://github.com/runtimenoteslabs/memory-layer/issues"
+Changelog = "https://github.com/runtimenoteslabs/memory-layer/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "src/memory_layer/__init__.py"

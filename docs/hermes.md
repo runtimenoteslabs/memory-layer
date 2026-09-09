@@ -26,6 +26,10 @@ realpath "$(command -v hermes)"
 hermes config set memory.provider memorylayer
 ```
 
+Memory Layer is installed from GitHub, not PyPI. An unrelated package holds
+the name `memory-layer` on PyPI, so `pip install memory-layer` fetches that one
+instead.
+
 Restart Hermes, or run `/reset`. Hermes finds the provider through the
 `hermes_agent.memory_providers` entry point, so you do not edit its code or
 config files by hand. Once installed, `hermes memory setup` lists `memorylayer`.
@@ -34,7 +38,8 @@ The base install adds `aiosqlite`, `numpy`, and `watchdog`. For semantic search,
 add the embedding extra:
 
 ```bash
-~/.hermes/hermes-agent/venv/bin/python -m pip install 'memory-layer[embedding]'
+~/.hermes/hermes-agent/venv/bin/python -m pip install \
+    'memory-layer[embedding] @ git+https://github.com/runtimenoteslabs/memory-layer.git'
 ```
 
 Without the extra, retrieval uses only the BM25 half of the hybrid. With it, the

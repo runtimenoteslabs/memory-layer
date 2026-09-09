@@ -23,6 +23,11 @@ cd memory-layer
 pip install -e ".[dev]"
 ```
 
+The installed distribution is named `memory-layer-ai`, which is what `pip list`
+and `pip uninstall` expect. The import name is `memory_layer`. An unrelated
+package holds `memory-layer` on PyPI, so `pip install memory-layer` fetches that
+one instead of this project.
+
 **Note:** First run downloads an embedding model (~100MB) for semantic search. This happens once and is cached. Subsequent operations are fast (<100ms).
 
 ## Quick Start
