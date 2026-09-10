@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory_layer.core.models import (
+from runtime_memory.core.models import (
     ContextResponse,
     Memory,
     MemoryCategory,
@@ -26,8 +26,8 @@ from memory_layer.core.models import (
     Outcome,
     SearchResult,
 )
-from memory_layer.core.storage import MemoryNotFoundError
-from memory_layer.server.mcp import (
+from runtime_memory.core.storage import MemoryNotFoundError
+from runtime_memory.server.mcp import (
     MCPError,
     MCPErrorCode,
     MCPRequest,
@@ -639,7 +639,7 @@ class TestMCPServer:
 
         assert response.error is None
         assert response.result["protocolVersion"] == "2024-11-05"
-        assert response.result["serverInfo"]["name"] == "memory-layer"
+        assert response.result["serverInfo"]["name"] == "runtime-memory"
 
     @pytest.mark.asyncio
     async def test_handle_list_tools(self, mcp_server):
@@ -1158,14 +1158,14 @@ class TestEnsureEngine:
     async def test_builds_and_initializes_engine(self, tmp_path, monkeypatch):
         """Engine is built from an EngineConfig and initialized before use."""
         db_path = tmp_path / "nested" / "memories.db"
-        monkeypatch.setenv("MEMORY_LAYER_DB", str(db_path))
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(db_path))
 
         server = MCPServer()
         built = MagicMock()
         built.initialize = AsyncMock()
 
         with patch(
-            "memory_layer.server.mcp.MemoryEngine", return_value=built
+            "runtime_memory.server.mcp.MemoryEngine", return_value=built
         ) as engine_cls:
             engine = await server._ensure_engine()
 
@@ -1183,14 +1183,14 @@ class TestEnsureEngine:
     @pytest.mark.asyncio
     async def test_engine_is_cached(self, tmp_path, monkeypatch):
         """The engine is built and initialized once, then reused."""
-        monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "memories.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
 
         server = MCPServer()
         built = MagicMock()
         built.initialize = AsyncMock()
 
         with patch(
-            "memory_layer.server.mcp.MemoryEngine", return_value=built
+            "runtime_memory.server.mcp.MemoryEngine", return_value=built
         ) as engine_cls:
             first = await server._ensure_engine()
             second = await server._ensure_engine()
@@ -1204,7 +1204,7 @@ class TestEnsureEngine:
         """An engine passed to the constructor is used as-is."""
         server = MCPServer(engine=mock_engine)
 
-        with patch("memory_layer.server.mcp.MemoryEngine") as engine_cls:
+        with patch("runtime_memory.server.mcp.MemoryEngine") as engine_cls:
             engine = await server._ensure_engine()
 
         assert engine is mock_engine

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory_layer.claude_code.hooks import (
+from runtime_memory.claude_code.hooks import (
     HookConfig,
     HookError,
     HookNotInstalledError,
@@ -277,7 +277,7 @@ class TestMemoryLayerHooks:
         content = script_path.read_text()
 
         assert "#!/usr/bin/env python3" in content
-        assert "memory_layer" in content
+        assert "runtime_memory" in content
         assert "pre_session" in content
 
     def test_hook_script_is_executable(self, hooks: MemoryLayerHooks) -> None:

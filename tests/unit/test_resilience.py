@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory_layer.core.resilience import (
+from runtime_memory.core.resilience import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitOpenError,

@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from memory_layer.core.models import (
+from runtime_memory.core.models import (
     Memory,
     MemoryCategory,
     MemoryScope,
     MemorySource,
     Outcome,
 )
-from memory_layer.core.storage import (
+from runtime_memory.core.storage import (
     MemoryNotFoundError,
     MemoryStorage,
     StorageStats,

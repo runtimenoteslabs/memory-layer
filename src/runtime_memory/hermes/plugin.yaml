@@ -1,0 +1,13 @@
+name: runtimememory
+version: 1.0.0
+description: "Runtime Memory - local SQLite memory with hybrid retrieval and outcome-based learning, shared across Claude Code, MCP clients and Hermes."
+
+# Hermes checks each entry by importing `dist_name.replace("-", "_")` unless it
+# has a mapping for the name. `runtime-memory` imports as `runtime_memory`, so
+# it resolves without an upstream mapping, unlike the bundled providers that
+# need one (honcho-ai -> honcho, mem0ai -> mem0).
+pip_dependencies: ["runtime-memory"]
+
+requires_env: []
+hooks:
+  - on_session_end

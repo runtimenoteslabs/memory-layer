@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory_layer.claude_code.commands import (
+from runtime_memory.claude_code.commands import (
     CommandConfig,
     CommandHandler,
     CommandResult,
@@ -17,7 +17,7 @@ from memory_layer.claude_code.commands import (
     export_command_schemas,
     get_command_schemas,
 )
-from memory_layer.core.models import (
+from runtime_memory.core.models import (
     Memory,
     MemoryCategory,
     MemoryScope,

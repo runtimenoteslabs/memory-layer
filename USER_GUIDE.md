@@ -1,12 +1,12 @@
-# Memory Layer - User Guide
+# Runtime Memory - User Guide
 
-A simple guide for using Memory Layer with Claude Code and other AI coding assistants.
+A simple guide for using Runtime Memory with Claude Code and other AI coding assistants.
 
 ---
 
 ## What It Does
 
-Memory Layer gives Claude Code (and other AI coding assistants) a persistent memory. Instead of forgetting everything when you close a session, Claude remembers:
+Runtime Memory gives Claude Code (and other AI coding assistants) a persistent memory. Instead of forgetting everything when you close a session, Claude remembers:
 
 - Your project conventions ("we use tabs, not spaces")
 - Past decisions ("we chose PostgreSQL because...")
@@ -20,8 +20,8 @@ Over time, it learns which memories are actually useful based on your feedback.
 ## Setup (One Time)
 
 ```bash
-# 1. Install from GitHub
-pip install git+https://github.com/runtimenoteslabs/memory-layer.git
+# 1. Install
+pip install runtime-memory
 
 # 2. Go to your project
 cd your-project
@@ -33,7 +33,7 @@ mem install-plugin
 claude
 ```
 
-That's it. Memory Layer now works automatically.
+That's it. Runtime Memory now works automatically.
 
 ---
 
@@ -183,7 +183,7 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
 
 ## How It Works (For the Curious)
 
-1. **Storage**: Memories are stored locally in a SQLite database (`~/.memory-layer/memories.db`)
+1. **Storage**: Memories are stored locally in a SQLite database (`~/.runtime-memory/memories.db`)
 
 2. **Retrieval**: When you ask questions, relevant memories are automatically searched using a hybrid approach:
    - Semantic similarity (what you're asking about)
@@ -206,11 +206,11 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
 
 ## First-Time Performance
 
-The first time you use Memory Layer, a few things happen that may make it seem slow:
+The first time you use Runtime Memory, a few things happen that may make it seem slow:
 
 1. **Embedding model download** (~100MB): On first search, the system downloads a sentence embedding model for semantic search. This happens once and is cached.
 
-2. **Database creation**: The SQLite database is created on first use at `~/.memory-layer/memories.db`.
+2. **Database creation**: The SQLite database is created on first use at `~/.runtime-memory/memories.db`.
 
 3. **Index building**: As you add memories, they get indexed for fast retrieval.
 
@@ -227,7 +227,7 @@ mem check
 
 ## Task Integration
 
-Memory Layer integrates with task trackers to automatically learn from task outcomes.
+Runtime Memory integrates with task trackers to automatically learn from task outcomes.
 
 ### Supported Task Sources
 
@@ -296,7 +296,7 @@ mem beads-link <memory_id>
 
 ## Web UI
 
-Memory Layer includes a web interface for browsing and managing memories.
+Runtime Memory includes a web interface for browsing and managing memories.
 
 ### Starting the Web UI
 
@@ -324,11 +324,11 @@ mem serve --rest --port 8080
 
 ### "mem: command not found"
 
-Make sure memory-layer is installed and your PATH includes pip's bin directory:
+Make sure runtime-memory is installed and your PATH includes pip's bin directory:
 ```bash
-pip install git+https://github.com/runtimenoteslabs/memory-layer.git
+pip install runtime-memory
 # or
-python -m pip install git+https://github.com/runtimenoteslabs/memory-layer.git
+python -m pip install runtime-memory
 ```
 
 ### Memories not loading in Claude Code
@@ -345,7 +345,7 @@ Then restart Claude Code.
 
 Delete the database:
 ```bash
-rm ~/.memory-layer/memories.db
+rm ~/.runtime-memory/memories.db
 ```
 
 ---

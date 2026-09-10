@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from memory_layer import __version__
+from runtime_memory import __version__
 
 # Get the project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -366,7 +366,7 @@ class TestPluginJsonValidation:
 
         data = load_json_file(plugin_file_path)
         assert "name" in data
-        assert data["name"] == "memory-layer"
+        assert data["name"] == "runtime-memory"
 
     def test_plugin_version_matches_package(self, plugin_file_path: Path):
         """Test that plugin.json declares the package version.
@@ -453,15 +453,15 @@ class TestMcpJsonValidation:
 
         assert not errors, f"Schema validation errors: {errors}"
 
-    def test_mcp_has_memory_layer_server(self, mcp_file_path: Path):
-        """Test that MCP config has memory-layer server."""
+    def test_mcp_has_runtime_memory_server(self, mcp_file_path: Path):
+        """Test that MCP config has runtime-memory server."""
         if not mcp_file_path.exists():
             pytest.skip(".mcp.json not found")
 
         data = load_json_file(mcp_file_path)
         servers = data.get("mcpServers", {})
 
-        assert "memory-layer" in servers
+        assert "runtime-memory" in servers
 
     def test_mcp_server_command(self, mcp_file_path: Path):
         """Test that MCP server uses correct command."""
@@ -469,7 +469,7 @@ class TestMcpJsonValidation:
             pytest.skip(".mcp.json not found")
 
         data = load_json_file(mcp_file_path)
-        server = data.get("mcpServers", {}).get("memory-layer", {})
+        server = data.get("mcpServers", {}).get("runtime-memory", {})
 
         assert server.get("command") == "mem"
         assert "serve" in server.get("args", [])
@@ -480,7 +480,7 @@ class TestMcpJsonValidation:
         MCP servers register tools at runtime via the protocol, not via a static
         list in .mcp.json. This test inspects the server's TOOL_SCHEMAS registry.
         """
-        from memory_layer.server.mcp import TOOL_SCHEMAS
+        from runtime_memory.server.mcp import TOOL_SCHEMAS
 
         tool_names = {schema.name for schema in TOOL_SCHEMAS}
         required_tools = {"search_memories", "add_memory", "record_outcome", "get_context"}

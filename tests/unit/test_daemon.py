@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory_layer.claude_code.daemon import (
+from runtime_memory.claude_code.daemon import (
     DaemonConfig,
     DaemonError,
     DaemonAlreadyRunningError,

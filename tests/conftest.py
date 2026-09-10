@@ -1,4 +1,4 @@
-"""Pytest configuration and fixtures for Memory Layer tests."""
+"""Pytest configuration and fixtures for Runtime Memory tests."""
 
 from __future__ import annotations
 

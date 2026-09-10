@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
-from memory_layer.core.embeddings import (
+from runtime_memory.core.embeddings import (
     APIEmbeddingProvider,
     APIError,
     BatchEmbeddingResult,
@@ -755,21 +755,21 @@ class TestLocalProviderFallback:
         # Asserted on the logger directly rather than via caplog: other tests
         # reconfigure logging, which leaves caplog order-dependent here.
         with (
-            patch("memory_layer.core.embeddings.logger") as mock_logger,
+            patch("runtime_memory.core.embeddings.logger") as mock_logger,
             patch("importlib.util.find_spec", return_value=None),
         ):
             get_embedding_provider("local")
 
         mock_logger.info.assert_called_once()
         message = mock_logger.info.call_args.args[0]
-        assert "memory-layer-ai[embedding]" in message
+        assert "runtime-memory[embedding]" in message
         assert "memory-layer[embedding]" not in message
 
     def test_fallback_does_not_warn(self) -> None:
         """A base install is a supported setup, and the CLI builds a provider
         per command, so this must not print on every invocation."""
         with (
-            patch("memory_layer.core.embeddings.logger") as mock_logger,
+            patch("runtime_memory.core.embeddings.logger") as mock_logger,
             patch("importlib.util.find_spec", return_value=None),
         ):
             get_embedding_provider("local")

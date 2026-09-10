@@ -7,9 +7,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from memory_layer.core.embeddings import MockEmbeddingProvider
-from memory_layer.core.models import Memory, MemoryCategory, SearchResult
-from memory_layer.core.retrieval import (
+from runtime_memory.core.embeddings import MockEmbeddingProvider
+from runtime_memory.core.models import Memory, MemoryCategory, SearchResult
+from runtime_memory.core.retrieval import (
     BM25Index,
     CategoryRouter,
     HybridRetriever,

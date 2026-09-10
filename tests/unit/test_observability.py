@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from memory_layer.core.observability import (
+from runtime_memory.core.observability import (
     HealthCheckResult,
     HealthChecker,
     HealthReport,
@@ -130,13 +130,13 @@ class TestSetupStructuredLogging:
     def test_setup_text_format(self):
         """Test setting up text format logging."""
         setup_structured_logging(level="INFO", format="text")
-        logger = logging.getLogger("memory_layer")
+        logger = logging.getLogger("runtime_memory")
         assert logger.level == logging.INFO
 
     def test_setup_json_format(self):
         """Test setting up JSON format logging."""
         setup_structured_logging(level="DEBUG", format="json")
-        logger = logging.getLogger("memory_layer")
+        logger = logging.getLogger("runtime_memory")
         assert logger.level == logging.DEBUG
 
         # Check handler uses JsonFormatter

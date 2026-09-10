@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from memory_layer.core.embeddings import MockEmbeddingProvider
-from memory_layer.core.engine import (
+from runtime_memory.core.embeddings import MockEmbeddingProvider
+from runtime_memory.core.engine import (
     EngineConfig,
     EngineError,
     EngineNotInitializedError,
@@ -16,7 +16,7 @@ from memory_layer.core.engine import (
     MemoryEngine,
     create_engine,
 )
-from memory_layer.core.models import (
+from runtime_memory.core.models import (
     Memory,
     MemoryCategory,
     MemoryScope,
@@ -24,8 +24,8 @@ from memory_layer.core.models import (
     Outcome,
     SearchResult,
 )
-from memory_layer.core.retrieval import HybridRetriever
-from memory_layer.core.storage import MemoryNotFoundError, MemoryStorage
+from runtime_memory.core.retrieval import HybridRetriever
+from runtime_memory.core.storage import MemoryNotFoundError, MemoryStorage
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ class TestEngineConfig:
 
     def test_path_expansion(self) -> None:
         """Test that paths are expanded."""
-        config = EngineConfig(db_path="~/.memory-layer/test.db")
+        config = EngineConfig(db_path="~/.runtime-memory/test.db")
         assert str(config.db_path).startswith(str(Path.home()))
 
     def test_custom_config(self) -> None:

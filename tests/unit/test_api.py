@@ -10,16 +10,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from memory_layer import __version__
-from memory_layer.core.models import (
+from runtime_memory import __version__
+from runtime_memory.core.models import (
     Memory,
     MemoryCategory,
     MemoryScope,
     MemorySource,
     Outcome,
 )
-from memory_layer.core.storage import MemoryNotFoundError
-from memory_layer.server.api import (
+from runtime_memory.core.storage import MemoryNotFoundError
+from runtime_memory.server.api import (
     APIConfig,
     AppState,
     ContextResponse,
@@ -144,7 +144,7 @@ class TestAPIConfig:
 
     def test_api_key_from_env(self):
         """Test API key from environment."""
-        with patch.dict(os.environ, {"MEMORY_LAYER_API_KEY": "env-key"}):
+        with patch.dict(os.environ, {"RUNTIME_MEMORY_API_KEY": "env-key"}):
             # Need to clear the explicit None to allow env fallback
             config = APIConfig()
             assert config.api_key == "env-key"
@@ -429,8 +429,8 @@ class TestStatsEndpoint:
 
     def test_get_stats(self, test_client, mock_engine):
         """Test get stats endpoint."""
-        from memory_layer.core.storage import StorageStats
-        from memory_layer.core.engine import EngineStats
+        from runtime_memory.core.storage import StorageStats
+        from runtime_memory.core.engine import EngineStats
 
         storage_stats = StorageStats(
             total_memories=100,
@@ -458,8 +458,8 @@ class TestStatsEndpoint:
 
     def test_get_stats_with_project(self, test_client, mock_engine):
         """Test get stats with project filter."""
-        from memory_layer.core.storage import StorageStats
-        from memory_layer.core.engine import EngineStats
+        from runtime_memory.core.storage import StorageStats
+        from runtime_memory.core.engine import EngineStats
 
         storage_stats = StorageStats(
             total_memories=20,
@@ -680,7 +680,7 @@ class TestSearchMemories:
 
     def test_search_memories(self, test_client, mock_engine):
         """Test searching memories."""
-        from memory_layer.core.models import SearchResult
+        from runtime_memory.core.models import SearchResult
 
         memory = create_test_memory()
         results = [
@@ -810,7 +810,7 @@ class TestGetContext:
 
     def test_get_context(self, test_client, mock_engine):
         """Test getting context."""
-        from memory_layer.core.models import ContextResponse as EngineContextResponse
+        from runtime_memory.core.models import ContextResponse as EngineContextResponse
 
         memories = [create_test_memory()]
         mock_engine.get_context.return_value = EngineContextResponse(
@@ -830,7 +830,7 @@ class TestGetContext:
 
     def test_get_context_with_options(self, test_client, mock_engine):
         """Test getting context with options."""
-        from memory_layer.core.models import ContextResponse as EngineContextResponse
+        from runtime_memory.core.models import ContextResponse as EngineContextResponse
 
         mock_engine.get_context.return_value = EngineContextResponse(
             memories=[],
@@ -916,8 +916,8 @@ class TestAuthentication:
 
     def test_auth_required_valid_key(self, auth_test_client, mock_engine):
         """Test auth required with valid key."""
-        from memory_layer.core.storage import StorageStats
-        from memory_layer.core.engine import EngineStats
+        from runtime_memory.core.storage import StorageStats
+        from runtime_memory.core.engine import EngineStats
 
         storage_stats = StorageStats(
             total_memories=0,
@@ -1033,7 +1033,7 @@ class TestCreateApp:
         _app_state.rate_limiter = None
 
         app = create_app()
-        assert app.title == "Memory Layer API"
+        assert app.title == "Runtime Memory API"
         assert app.version == __version__
 
     def test_create_app_with_config(self, mock_engine):
@@ -1070,7 +1070,7 @@ class TestAppState:
     def test_get_engine_creates_default(self):
         """Test get_engine creates default engine."""
         state = AppState()
-        with patch("memory_layer.server.api.MemoryEngine") as mock_cls:
+        with patch("runtime_memory.server.api.MemoryEngine") as mock_cls:
             mock_cls.return_value = MagicMock()
             engine = state.get_engine()
             assert engine is not None
@@ -1194,7 +1194,7 @@ class TestEndpointIntegration:
 
     def test_search_and_record_outcome(self, test_client, mock_engine):
         """Test search and outcome workflow."""
-        from memory_layer.core.models import SearchResult
+        from runtime_memory.core.models import SearchResult
 
         memory = create_test_memory()
         results = [

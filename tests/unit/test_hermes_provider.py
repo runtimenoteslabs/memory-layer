@@ -18,22 +18,22 @@ from pathlib import Path
 
 import pytest
 
-from memory_layer.core.models import Outcome
-from memory_layer.hermes import MemoryLayerProvider, register
-from memory_layer.hermes._base import RecallStatus, is_trivial_prompt
-from memory_layer.hermes.bridge import DEFAULT_TIMEOUT, run_sync, spawn
-from memory_layer.hermes.provider import PROVIDER_NAME, _embedding_provider_name
-from memory_layer.hermes.trace import TRACE_ENV_VAR, TraceWriter
+from runtime_memory.core.models import Outcome
+from runtime_memory.hermes import RuntimeMemoryProvider, register
+from runtime_memory.hermes._base import RecallStatus, is_trivial_prompt
+from runtime_memory.hermes.bridge import DEFAULT_TIMEOUT, run_sync, spawn
+from runtime_memory.hermes.provider import PROVIDER_NAME, _embedding_provider_name
+from runtime_memory.hermes.trace import TRACE_ENV_VAR, TraceWriter
 
 
 @pytest.fixture
 def provider(tmp_path, monkeypatch):
     """An initialized provider backed by a throwaway store."""
-    monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "memories.db"))
-    monkeypatch.setenv("MEMORY_LAYER_EMBEDDING", "mock")
+    monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+    monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
     monkeypatch.delenv(TRACE_ENV_VAR, raising=False)
 
-    instance = MemoryLayerProvider()
+    instance = RuntimeMemoryProvider()
     instance.initialize("session-1", agent_context="primary")
     yield instance
     instance.shutdown()
@@ -88,7 +88,7 @@ class TestBaseShim:
 
     def test_recall_status_defaults(self):
         """RecallStatus carries a label, a count and a glyph."""
-        status = RecallStatus(provider_label="Memory Layer", count=3)
+        status = RecallStatus(provider_label="Runtime Memory", count=3)
 
         assert status.count == 3
         assert status.glyph
@@ -152,7 +152,7 @@ class TestLifecycle:
 
     def test_name_matches_entry_point(self, provider):
         """The provider answers to the name Hermes activates it by."""
-        assert provider.name == PROVIDER_NAME == "memorylayer"
+        assert provider.name == PROVIDER_NAME == "runtimememory"
 
     def test_available_with_writable_store(self, provider):
         """Availability is a filesystem check, with no network involved."""
@@ -162,20 +162,20 @@ class TestLifecycle:
         """An unwritable location reports unavailable with a usable reason."""
         blocked = tmp_path / "blocked"
         blocked.mkdir(mode=0o500)
-        monkeypatch.setenv("MEMORY_LAYER_DB", str(blocked / "sub" / "memories.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(blocked / "sub" / "memories.db"))
 
-        instance = MemoryLayerProvider()
+        instance = RuntimeMemoryProvider()
 
         assert instance.is_available() is False
-        assert "MEMORY_LAYER_DB" in instance.unavailable_reason()
+        assert "RUNTIME_MEMORY_DB" in instance.unavailable_reason()
 
     def test_workspace_becomes_project(self, tmp_path, monkeypatch):
         """Memories are scoped to the workspace directory name."""
-        monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "m.db"))
-        monkeypatch.setenv("MEMORY_LAYER_EMBEDDING", "mock")
-        monkeypatch.delenv("MEMORY_LAYER_PROJECT", raising=False)
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+        monkeypatch.delenv("RUNTIME_MEMORY_PROJECT", raising=False)
 
-        instance = MemoryLayerProvider()
+        instance = RuntimeMemoryProvider()
         instance.initialize("s", agent_workspace="/home/user/my-project")
         try:
             assert instance._project == "my-project"
@@ -214,31 +214,31 @@ class TestEmbeddingBackend:
 
     def test_defaults_to_local_even_without_the_model(self, monkeypatch):
         """The engine factory decides what `local` resolves to, not the provider."""
-        monkeypatch.delenv("MEMORY_LAYER_EMBEDDING", raising=False)
+        monkeypatch.delenv("RUNTIME_MEMORY_EMBEDDING", raising=False)
         _hide_sentence_transformers(monkeypatch)
 
         assert _embedding_provider_name() == "local"
 
     def test_override_is_passed_through(self, monkeypatch):
         """An explicit choice wins."""
-        monkeypatch.setenv("MEMORY_LAYER_EMBEDDING", "voyage")
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "voyage")
 
         assert _embedding_provider_name() == "voyage"
 
     def test_missing_model_writes_no_vector(self, tmp_path, monkeypatch):
         """Recall still works, and nothing meaningless lands in the index."""
-        monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "memories.db"))
-        monkeypatch.delenv("MEMORY_LAYER_EMBEDDING", raising=False)
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+        monkeypatch.delenv("RUNTIME_MEMORY_EMBEDDING", raising=False)
         _hide_sentence_transformers(monkeypatch)
 
-        instance = MemoryLayerProvider()
+        instance = RuntimeMemoryProvider()
         instance.initialize("session-null", agent_context="primary")
         try:
             assert instance._engine.embedding_provider.available is False
 
             _call(
                 instance,
-                "memorylayer_remember",
+                "runtimememory_remember",
                 content="Run pytest from the repo root",
                 category="gotcha",
             )
@@ -262,7 +262,7 @@ class TestRecall:
         """A stored memory is retrieved and rendered for the prompt."""
         _call(
             provider,
-            "memorylayer_remember",
+            "runtimememory_remember",
             content="Run pytest from the repo root",
             category="gotcha",
         )
@@ -276,7 +276,7 @@ class TestRecall:
         """Ids are injected so the model can name memories in an outcome."""
         result = _call(
             provider,
-            "memorylayer_remember",
+            "runtimememory_remember",
             content="Use snake_case here",
             category="convention",
         )
@@ -288,7 +288,7 @@ class TestRecall:
     def test_prefetch_flags_proven_memories(self, provider):
         """One success is enough to mark a memory as having worked."""
         stored = _call(
-            provider, "memorylayer_remember", content="Clear the cache", category="troubleshooting"
+            provider, "runtimememory_remember", content="Clear the cache", category="troubleshooting"
         )
         run_sync(provider._engine.record_outcome([stored["memory_id"]], Outcome.WORKED))
 
@@ -299,7 +299,7 @@ class TestRecall:
     def test_prefetch_flags_discredited_memories(self, provider):
         """One failure is enough to mark a memory as having failed."""
         stored = _call(
-            provider, "memorylayer_remember", content="Delete the lockfile", category="workaround"
+            provider, "runtimememory_remember", content="Delete the lockfile", category="workaround"
         )
         run_sync(provider._engine.record_outcome([stored["memory_id"]], Outcome.FAILED))
 
@@ -310,7 +310,7 @@ class TestRecall:
     def test_mixed_record_is_left_unmarked(self, provider):
         """A memory that both worked and failed carries no claim either way."""
         stored = _call(
-            provider, "memorylayer_remember", content="Retry the request", category="pattern"
+            provider, "runtimememory_remember", content="Retry the request", category="pattern"
         )
         memory_id = stored["memory_id"]
         run_sync(provider._engine.record_outcome([memory_id], Outcome.WORKED))
@@ -323,7 +323,7 @@ class TestRecall:
 
     def test_trivial_prompt_skips_recall(self, provider):
         """An acknowledgement does not trigger retrieval."""
-        _call(provider, "memorylayer_remember", content="Something", category="general")
+        _call(provider, "runtimememory_remember", content="Something", category="general")
 
         assert provider.prefetch("thanks!") == ""
 
@@ -345,7 +345,7 @@ class TestRecall:
         """The indicator counts this turn's recall, never a stale one."""
         assert provider.recall_status() is None
 
-        _call(provider, "memorylayer_remember", content="A fact", category="general")
+        _call(provider, "runtimememory_remember", content="A fact", category="general")
         provider.prefetch("fact?")
         assert provider.recall_status().count == 1
 
@@ -376,24 +376,24 @@ class TestWrites:
         provider.on_memory_write("add", "user", "Prefers tabs over spaces")
         run_sync(asyncio.sleep(0.5))
 
-        found = _call(provider, "memorylayer_recall", query="tabs")
+        found = _call(provider, "runtimememory_recall", query="tabs")
 
         assert found["count"] == 1
         assert found["memories"][0]["category"] == "preference"
 
     def test_mirroring_can_be_disabled(self, tmp_path, monkeypatch):
         """Mirroring is a setting, not a fixed behavior."""
-        monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "m.db"))
-        monkeypatch.setenv("MEMORY_LAYER_EMBEDDING", "mock")
-        monkeypatch.setenv("MEMORY_LAYER_MIRROR_WRITES", "false")
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+        monkeypatch.setenv("RUNTIME_MEMORY_MIRROR_WRITES", "false")
 
-        instance = MemoryLayerProvider()
+        instance = RuntimeMemoryProvider()
         instance.initialize("s")
         try:
             instance.on_memory_write("add", "user", "Should not be stored")
             run_sync(asyncio.sleep(0.3))
 
-            assert _call(instance, "memorylayer_recall", query="stored")["count"] == 0
+            assert _call(instance, "runtimememory_recall", query="stored")["count"] == 0
         finally:
             instance.shutdown()
 
@@ -402,24 +402,24 @@ class TestWrites:
         provider.on_memory_write("remove", "user", "Some old fact")
         run_sync(asyncio.sleep(0.3))
 
-        assert _call(provider, "memorylayer_recall", query="old fact")["count"] == 0
+        assert _call(provider, "runtimememory_recall", query="old fact")["count"] == 0
 
     def test_subagents_do_not_write(self, tmp_path, monkeypatch):
         """Non-primary contexts read the store but never add to it."""
-        monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "m.db"))
-        monkeypatch.setenv("MEMORY_LAYER_EMBEDDING", "mock")
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
 
-        instance = MemoryLayerProvider()
+        instance = RuntimeMemoryProvider()
         instance.initialize("s", agent_context="subagent")
         try:
             assert instance._writes_allowed is False
 
-            result = _call(instance, "memorylayer_remember", content="X", category="general")
+            result = _call(instance, "runtimememory_remember", content="X", category="general")
             assert "error" in result
 
             instance.on_memory_write("add", "user", "Also blocked")
             run_sync(asyncio.sleep(0.3))
-            assert _call(instance, "memorylayer_recall", query="blocked")["count"] == 0
+            assert _call(instance, "runtimememory_recall", query="blocked")["count"] == 0
         finally:
             instance.shutdown()
 
@@ -446,40 +446,40 @@ class TestTools:
 
     def test_unknown_tool_returns_error(self, provider):
         """An unrecognized tool is reported, not raised."""
-        assert "error" in _call(provider, "memorylayer_nonexistent")
+        assert "error" in _call(provider, "runtimememory_nonexistent")
 
     def test_bad_category_lists_valid_ones(self, provider):
         """A wrong category tells the model what it may use instead."""
-        result = _call(provider, "memorylayer_remember", content="X", category="nonsense")
+        result = _call(provider, "runtimememory_remember", content="X", category="nonsense")
 
         assert "nonsense" in result["error"]
         assert "convention" in result["error"]
 
     def test_missing_content_is_rejected(self, provider):
         """Empty content is refused rather than stored."""
-        assert "error" in _call(provider, "memorylayer_remember", content="   ", category="general")
+        assert "error" in _call(provider, "runtimememory_remember", content="   ", category="general")
 
     def test_bad_outcome_is_rejected(self, provider):
         """Only the three defined outcomes are accepted."""
-        result = _call(provider, "memorylayer_outcome", outcome="great")
+        result = _call(provider, "runtimememory_outcome", outcome="great")
 
         assert "great" in result["error"]
 
     def test_stats_reports_the_store(self, provider):
         """Stats summarize what is held, broken down by category."""
-        _call(provider, "memorylayer_remember", content="A gotcha", category="gotcha")
+        _call(provider, "runtimememory_remember", content="A gotcha", category="gotcha")
 
-        stats = _call(provider, "memorylayer_stats")
+        stats = _call(provider, "runtimememory_stats")
 
         assert stats["total_memories"] == 1
         assert stats["by_category"]["gotcha"] == 1
 
     def test_explicit_recall_joins_the_turn(self, provider):
         """A tool search is creditable by a later outcome, like automatic recall."""
-        _call(provider, "memorylayer_remember", content="A fact", category="general")
+        _call(provider, "runtimememory_remember", content="A fact", category="general")
 
-        _call(provider, "memorylayer_recall", query="fact")
-        result = _call(provider, "memorylayer_outcome", outcome="worked")
+        _call(provider, "runtimememory_recall", query="fact")
+        result = _call(provider, "runtimememory_outcome", outcome="worked")
 
         assert result["recorded"] is True
 
@@ -496,13 +496,13 @@ class TestOutcomes:
         """The model need not repeat ids back to score what it was given."""
         _call(
             provider,
-            "memorylayer_remember",
+            "runtimememory_remember",
             content="Restart the daemon",
             category="troubleshooting",
         )
         provider.prefetch("daemon is stuck")
 
-        result = _call(provider, "memorylayer_outcome", outcome="worked")
+        result = _call(provider, "runtimememory_outcome", outcome="worked")
 
         assert result["recorded"] is True
         assert result["updated"][0]["outcome_score"] == pytest.approx(0.2)
@@ -510,19 +510,19 @@ class TestOutcomes:
     def test_failure_costs_more_than_success_gains(self, provider):
         """The asymmetry that makes bad advice sink is preserved end to end."""
         stored = _call(
-            provider, "memorylayer_remember", content="Try turning it off", category="workaround"
+            provider, "runtimememory_remember", content="Try turning it off", category="workaround"
         )
         memory_id = stored["memory_id"]
 
-        worked = _call(provider, "memorylayer_outcome", outcome="worked", memory_ids=[memory_id])
-        failed = _call(provider, "memorylayer_outcome", outcome="failed", memory_ids=[memory_id])
+        worked = _call(provider, "runtimememory_outcome", outcome="worked", memory_ids=[memory_id])
+        failed = _call(provider, "runtimememory_outcome", outcome="failed", memory_ids=[memory_id])
 
         assert worked["updated"][0]["outcome_score"] == pytest.approx(0.2)
         assert failed["updated"][0]["outcome_score"] == pytest.approx(-0.1)
 
     def test_outcome_without_recall_is_a_no_op(self, provider):
         """With nothing recalled there is nothing to credit or blame."""
-        result = _call(provider, "memorylayer_outcome", outcome="worked")
+        result = _call(provider, "runtimememory_outcome", outcome="worked")
 
         assert result["recorded"] is False
 
@@ -543,17 +543,17 @@ class TestTrace:
 
     def test_records_recall_and_outcome(self, tmp_path, monkeypatch):
         """A turn's retrieval and its outcome share a turn_id, so they join."""
-        monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "m.db"))
-        monkeypatch.setenv("MEMORY_LAYER_EMBEDDING", "mock")
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
         trace_path = tmp_path / "traces" / "run.jsonl"
         monkeypatch.setenv(TRACE_ENV_VAR, str(trace_path))
 
-        instance = MemoryLayerProvider()
+        instance = RuntimeMemoryProvider()
         instance.initialize("session-9")
         try:
-            _call(instance, "memorylayer_remember", content="A useful fact", category="general")
+            _call(instance, "runtimememory_remember", content="A useful fact", category="general")
             instance.prefetch("tell me the fact")
-            _call(instance, "memorylayer_outcome", outcome="worked")
+            _call(instance, "runtimememory_outcome", outcome="worked")
         finally:
             instance.shutdown()
 
@@ -604,7 +604,7 @@ class TestRegistration:
 
         register(Ctx())
 
-        assert isinstance(captured[0], MemoryLayerProvider)
+        assert isinstance(captured[0], RuntimeMemoryProvider)
 
     def test_entry_point_is_declared(self):
         """The entry point must name a package, not a bare module.
@@ -617,6 +617,6 @@ class TestRegistration:
 
         group = config["project"]["entry-points"]["hermes_agent.memory_providers"]
 
-        assert group[PROVIDER_NAME] == "memory_layer.hermes"
-        assert (root / "src" / "memory_layer" / "hermes" / "__init__.py").exists()
-        assert (root / "src" / "memory_layer" / "hermes" / "plugin.yaml").exists()
+        assert group[PROVIDER_NAME] == "runtime_memory.hermes"
+        assert (root / "src" / "runtime_memory" / "hermes" / "__init__.py").exists()
+        assert (root / "src" / "runtime_memory" / "hermes" / "plugin.yaml").exists()

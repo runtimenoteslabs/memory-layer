@@ -1,17 +1,22 @@
-# Memory Layer
+# Runtime Memory
 
 Persistent memory for AI coding agents with outcome-based learning.
 
-> **New to Memory Layer?** See the [User Guide](https://github.com/runtimenoteslabs/memory-layer/blob/main/USER_GUIDE.md) for an introduction to using Memory Layer with Claude Code.
+> **New to Runtime Memory?** See the [User Guide](https://github.com/runtimenoteslabs/memory-layer/blob/main/USER_GUIDE.md) for an introduction to using Runtime Memory with Claude Code.
 
 ## What It Does
 
-Memory Layer stores knowledge from your coding sessions and learns which memories actually help. When advice works, it gets boosted (+0.2). When it fails, it gets penalized (-0.3). Over time, good memories rise to the top.
+Runtime Memory stores knowledge from your coding sessions and learns which memories actually help. When advice works, it gets boosted (+0.2). When it fails, it gets penalized (-0.3). Over time, good memories rise to the top.
 
 ## Installation
 
 ```bash
-# Install from GitHub
+pip install runtime-memory
+```
+
+Or from source:
+
+```bash
 pip install git+https://github.com/runtimenoteslabs/memory-layer.git
 ```
 
@@ -23,10 +28,10 @@ cd memory-layer
 pip install -e ".[dev]"
 ```
 
-The installed distribution is named `memory-layer-ai`, which is what `pip list`
-and `pip uninstall` expect. The import name is `memory_layer`. An unrelated
-package holds `memory-layer` on PyPI, so `pip install memory-layer` fetches that
-one instead of this project.
+The distribution is `runtime-memory` and the import is `runtime_memory`. The
+repository is still named memory-layer, which is where the project started; the
+package was renamed in 3.0. An unrelated package holds `memory-layer` on PyPI,
+so `pip install memory-layer` fetches that one instead of this project.
 
 **Note:** First run downloads an embedding model (~100MB) for semantic search. This happens once and is cached. Subsequent operations are fast (<100ms).
 
@@ -35,7 +40,7 @@ one instead of this project.
 ### Python SDK
 
 ```python
-from memory_layer.sdk import MemoryClient
+from runtime_memory.sdk import MemoryClient
 
 async with MemoryClient() as client:
     # Store a memory
@@ -57,7 +62,7 @@ async with MemoryClient() as client:
 ### Synchronous Client
 
 ```python
-from memory_layer.sdk import SyncMemoryClient
+from runtime_memory.sdk import SyncMemoryClient
 
 with SyncMemoryClient() as client:
     client.add("Always validate user input", category="convention")
@@ -105,7 +110,7 @@ curl -X POST http://localhost:8080/memories/search \
 
 ### MCP Server
 
-For multi-agent setups, Memory Layer provides an MCP server:
+For multi-agent setups, Runtime Memory provides an MCP server:
 
 ```bash
 mem serve --mcp
@@ -164,13 +169,12 @@ All agents share the same memory store. Memories created in Claude Code appear i
 
 ### Claude Code Integration
 
-Memory Layer integrates with Claude Code via hooks and skills. For a beginner-friendly walkthrough, see the [User Guide](https://github.com/runtimenoteslabs/memory-layer/blob/main/USER_GUIDE.md).
+Runtime Memory integrates with Claude Code via hooks and skills. For a beginner-friendly walkthrough, see the [User Guide](https://github.com/runtimenoteslabs/memory-layer/blob/main/USER_GUIDE.md).
 
 **Installation:**
 
 ```bash
-# Install from GitHub
-pip install git+https://github.com/runtimenoteslabs/memory-layer.git
+pip install runtime-memory
 
 # Go to your project directory
 cd your-project
@@ -211,7 +215,7 @@ The `mem install-plugin` command creates:
 
 ### Task Integration (Beads + Claude Code)
 
-Memory Layer integrates with task trackers to automatically learn from task outcomes.
+Runtime Memory integrates with task trackers to automatically learn from task outcomes.
 
 **Supported sources:**
 - [Beads](https://github.com/steveyegge/beads) - `.beads/` directory
@@ -237,7 +241,7 @@ mem beads-context
 mem beads-stats
 ```
 
-No setup required - Memory Layer auto-detects both `.beads/` and `~/.claude/todos/` directories.
+No setup required - Runtime Memory auto-detects both `.beads/` and `~/.claude/todos/` directories.
 
 **Environment variables:**
 - `CLAUDE_CODE_TASK_LIST_ID` - Filter to specific task list
@@ -245,7 +249,7 @@ No setup required - Memory Layer auto-detects both `.beads/` and `~/.claude/todo
 
 ### Hermes Agent Integration
 
-Memory Layer can serve as Hermes Agent's memory provider, replacing its capped
+Runtime Memory can serve as Hermes Agent's memory provider, replacing its capped
 note file with retrieval over the same store Claude Code and MCP clients use.
 
 ```bash
@@ -253,7 +257,7 @@ note file with retrieval over the same store Claude Code and MCP clients use.
 ~/.hermes/hermes-agent/venv/bin/python -m pip install \
     git+https://github.com/runtimenoteslabs/memory-layer.git
 
-hermes config set memory.provider memorylayer
+hermes config set memory.provider runtimememory
 ```
 
 Hermes finds the provider through the `hermes_agent.memory_providers` entry
@@ -263,7 +267,7 @@ evaluation trace format.
 
 ### Web UI
 
-Memory Layer includes a web interface for browsing and managing memories.
+Runtime Memory includes a web interface for browsing and managing memories.
 
 ```bash
 # Start server with Web UI
@@ -307,7 +311,7 @@ The asymmetric scoring is intentional: bad advice wastes debugging time and erod
 
 ## How Retrieval Works
 
-Memory Layer uses a 5-signal hybrid retrieval system that combines multiple relevance signals:
+Runtime Memory uses a 5-signal hybrid retrieval system that combines multiple relevance signals:
 
 | Signal | Weight | Description |
 |--------|--------|-------------|
@@ -350,7 +354,7 @@ After 12 weeks of use:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ANTHROPIC_API_KEY` | For LLM-based extraction | Required for extraction features |
-| `MEMORY_LAYER_DB` | Database location | `~/.memory-layer/memories.db` |
+| `MEMORY_LAYER_DB` | Database location | `~/.runtime-memory/memories.db` |
 | `MEMORY_LAYER_ENV` | Environment (development/testing/production) | development |
 | `MEMORY_LAYER_LOG_LEVEL` | Logging level | WARNING |
 | `CLAUDE_CODE_TASK_LIST_ID` | Filter Claude Code tasks | None |
@@ -359,7 +363,7 @@ After 12 weeks of use:
 ### Data Location
 
 ```
-~/.memory-layer/
+~/.runtime-memory/
 └── memories.db    # SQLite database
 ```
 
@@ -367,7 +371,7 @@ After 12 weeks of use:
 
 ```
 memory-layer/
-├── src/memory_layer/
+├── src/runtime_memory/
 │   ├── core/           # Storage, retrieval, models, config, resilience
 │   ├── extraction/     # LLM-based memory extraction
 │   ├── server/         # MCP server, REST API, Web UI
@@ -382,9 +386,9 @@ memory-layer/
 
 ## Security
 
-Memory Layer is designed for local, single-user use:
+Runtime Memory is designed for local, single-user use:
 
-- **Local storage**: All data stored in `~/.memory-layer/` (SQLite database)
+- **Local storage**: All data stored in `~/.runtime-memory/` (SQLite database)
 - **No external transmission**: Memories never leave your machine (except for LLM extraction if enabled)
 - **Parameterized queries**: All database operations use parameterized SQL (no injection risk)
 - **Input validation**: Pydantic models validate all API inputs
@@ -414,7 +418,7 @@ MIT
 
 ## Acknowledgments
 
-Memory Layer was inspired by studying 11 existing AI memory systems:
+Runtime Memory was inspired by studying 11 existing AI memory systems:
 
 - [claude-mem](https://github.com/thedotmack/claude-mem) - UX patterns, progressive disclosure, web viewer
 - [Claude Diary](https://github.com/rlancemartin/claude-diary) - Reflection synthesis, minimal viable memory
@@ -428,4 +432,4 @@ Memory Layer was inspired by studying 11 existing AI memory systems:
 
 And thank you to Anthropic for CLAUDE.md - the right foundation for project memory.
 
-The key insight: none of these systems learn from outcomes. Memory Layer adds a feedback loop so memories that actually help rise to the top.
+The key insight: none of these systems learn from outcomes. Runtime Memory adds a feedback loop so memories that actually help rise to the top.

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from memory_layer.core.models import (
+from runtime_memory.core.models import (
     ContextResponse,
     Memory,
     MemoryCategory,
@@ -19,7 +19,7 @@ from memory_layer.core.models import (
     Outcome,
     SearchResult,
 )
-from memory_layer.sdk import (
+from runtime_memory.sdk import (
     MemoryClient,
     SyncMemoryClient,
     ClientConfig,
@@ -38,7 +38,7 @@ from memory_layer.sdk import (
     record_outcome,
     close_default_client,
 )
-from memory_layer.sdk.client import _default_client, _default_config
+from runtime_memory.sdk.client import _default_client, _default_config
 
 
 # =============================================================================
@@ -290,7 +290,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_initialize_local(self, temp_db_path: Path):
         """Test local mode initialization."""
-        with patch("memory_layer.core.engine.MemoryEngine") as MockEngine:
+        with patch("runtime_memory.core.engine.MemoryEngine") as MockEngine:
             mock_engine = MagicMock()
             mock_engine.initialize = AsyncMock()
             mock_engine.close = AsyncMock()
@@ -308,7 +308,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_close_local(self, mock_engine):
         """Test closing local mode client."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             client = MemoryClient(mode="local")
             await client.initialize()
             await client.close()
@@ -319,7 +319,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_context_manager_local(self, mock_engine):
         """Test local mode as async context manager."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 assert client._initialized is True
 
@@ -328,7 +328,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_add_local(self, mock_engine):
         """Test adding memory in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 memory = await client.add(
                     content="Test content",
@@ -346,7 +346,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_get_local(self, mock_engine):
         """Test getting memory in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 memory = await client.get("test-memory-id")
 
@@ -356,7 +356,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_update_local(self, mock_engine):
         """Test updating memory in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 memory = await client.update(
                     "test-memory-id",
@@ -370,7 +370,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_delete_local(self, mock_engine):
         """Test deleting memory in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 await client.delete("test-memory-id")
 
@@ -381,7 +381,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_search_local(self, mock_engine):
         """Test searching in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 results = await client.search("test query", limit=5)
 
@@ -391,7 +391,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_list_local(self, mock_engine):
         """Test listing memories in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 memories = await client.list(project="test-project", limit=10)
 
@@ -401,7 +401,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_record_outcome_local(self, mock_engine):
         """Test recording outcome in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 memories = await client.record_outcome(
                     "test-memory-id", Outcome.WORKED
@@ -413,7 +413,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_get_context_local(self, mock_engine):
         """Test getting context in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 context = await client.get_context(project="test-project")
 
@@ -424,7 +424,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_stats_local(self, mock_engine):
         """Test getting stats in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 stats = await client.stats()
 
@@ -434,7 +434,7 @@ class TestMemoryClientLocalMode:
     @pytest.mark.asyncio
     async def test_health_local(self, mock_engine):
         """Test health check in local mode."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 health = await client.health()
 
@@ -453,7 +453,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_initialize_remote(self):
         """Test remote mode initialization."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             mock_client = MagicMock()
             mock_client.get = AsyncMock(return_value=MagicMock(
                 status_code=200,
@@ -473,7 +473,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_initialize_remote_connection_error(self):
         """Test remote mode initialization with connection error."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             mock_client = MagicMock()
             mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
             mock_client.aclose = AsyncMock()
@@ -489,7 +489,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_add_remote(self):
         """Test adding memory in remote mode."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             mock_response_data = create_test_memory().to_dict()
             mock_client = MagicMock()
             mock_client.get = AsyncMock(return_value=MagicMock(
@@ -515,7 +515,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_search_remote(self):
         """Test searching in remote mode."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             mock_response_data = {
                 "count": 1,
                 "results": [{
@@ -547,7 +547,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_remote_404_error(self):
         """Test 404 error handling in remote mode."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             mock_client = MagicMock()
             mock_client.get = AsyncMock(return_value=MagicMock(
                 status_code=200,
@@ -569,7 +569,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_remote_401_error(self):
         """Test 401 authentication error handling."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             mock_client = MagicMock()
             mock_client.get = AsyncMock(return_value=MagicMock(
                 status_code=200,
@@ -589,7 +589,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_remote_422_error(self):
         """Test 422 validation error handling."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             mock_client = MagicMock()
             mock_client.get = AsyncMock(return_value=MagicMock(
                 status_code=200,
@@ -609,7 +609,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_remote_429_error(self):
         """Test 429 rate limit error handling."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             mock_client = MagicMock()
             mock_client.get = AsyncMock(return_value=MagicMock(
                 status_code=200,
@@ -629,7 +629,7 @@ class TestMemoryClientRemoteMode:
     @pytest.mark.asyncio
     async def test_remote_retry_logic(self):
         """Test retry logic on transient failures."""
-        with patch("memory_layer.sdk.client.httpx.AsyncClient") as MockClient:
+        with patch("runtime_memory.sdk.client.httpx.AsyncClient") as MockClient:
             call_count = 0
 
             async def mock_request(*args, **kwargs):
@@ -684,7 +684,7 @@ class TestMemoryClientErrors:
     @pytest.mark.asyncio
     async def test_category_string_conversion(self, mock_engine):
         """Test that category strings are converted to enums."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 await client.add(content="test", category="pattern")
 
@@ -694,7 +694,7 @@ class TestMemoryClientErrors:
     @pytest.mark.asyncio
     async def test_outcome_string_conversion(self, mock_engine):
         """Test that outcome strings are converted to enums."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 await client.record_outcome("test-id", "worked")
 
@@ -718,13 +718,13 @@ class TestSyncMemoryClient:
 
     def test_context_manager(self, mock_engine):
         """Test sync client as context manager."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             with SyncMemoryClient(mode="local") as client:
                 assert client._async_client._initialized is True
 
     def test_add_sync(self, mock_engine):
         """Test adding memory synchronously."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             with SyncMemoryClient(mode="local") as client:
                 memory = client.add(content="Test content", category="pattern")
 
@@ -733,7 +733,7 @@ class TestSyncMemoryClient:
 
     def test_get_sync(self, mock_engine):
         """Test getting memory synchronously."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             with SyncMemoryClient(mode="local") as client:
                 memory = client.get("test-memory-id")
 
@@ -742,7 +742,7 @@ class TestSyncMemoryClient:
 
     def test_search_sync(self, mock_engine):
         """Test searching synchronously."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             with SyncMemoryClient(mode="local") as client:
                 results = client.search("test query")
 
@@ -751,7 +751,7 @@ class TestSyncMemoryClient:
 
     def test_list_sync(self, mock_engine):
         """Test listing memories synchronously."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             with SyncMemoryClient(mode="local") as client:
                 memories = client.list(project="test-project")
 
@@ -760,7 +760,7 @@ class TestSyncMemoryClient:
 
     def test_record_outcome_sync(self, mock_engine):
         """Test recording outcome synchronously."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             with SyncMemoryClient(mode="local") as client:
                 memories = client.record_outcome("test-id", "worked")
 
@@ -769,7 +769,7 @@ class TestSyncMemoryClient:
 
     def test_get_context_sync(self, mock_engine):
         """Test getting context synchronously."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             with SyncMemoryClient(mode="local") as client:
                 context = client.get_context(project="test-project")
 
@@ -791,7 +791,7 @@ class TestModuleLevelFunctions:
         yield
         await close_default_client()
         # Reset module state
-        import memory_layer.sdk.client as sdk_client
+        import runtime_memory.sdk.client as sdk_client
         sdk_client._default_client = None
         sdk_client._default_config = None
 
@@ -799,14 +799,14 @@ class TestModuleLevelFunctions:
         """Test configure function."""
         configure(mode="local", db_path="/tmp/test.db", api_key="test-key")
 
-        import memory_layer.sdk.client as sdk_client
+        import runtime_memory.sdk.client as sdk_client
         assert sdk_client._default_config is not None
         assert sdk_client._default_config.mode == ClientMode.LOCAL
         assert sdk_client._default_config.api_key == "test-key"
 
     def test_configure_resets_client(self):
         """Test that configure resets the default client."""
-        import memory_layer.sdk.client as sdk_client
+        import runtime_memory.sdk.client as sdk_client
         sdk_client._default_client = MagicMock()
 
         configure(mode="remote")
@@ -816,7 +816,7 @@ class TestModuleLevelFunctions:
     @pytest.mark.asyncio
     async def test_add_function(self, mock_engine):
         """Test module-level add function."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             configure(mode="local")
             memory = await add("Test content", category="pattern")
 
@@ -825,7 +825,7 @@ class TestModuleLevelFunctions:
     @pytest.mark.asyncio
     async def test_search_function(self, mock_engine):
         """Test module-level search function."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             configure(mode="local")
             results = await search("test query")
 
@@ -834,7 +834,7 @@ class TestModuleLevelFunctions:
     @pytest.mark.asyncio
     async def test_get_context_function(self, mock_engine):
         """Test module-level get_context function."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             configure(mode="local")
             context = await get_context(project="test-project")
 
@@ -843,7 +843,7 @@ class TestModuleLevelFunctions:
     @pytest.mark.asyncio
     async def test_record_outcome_function(self, mock_engine):
         """Test module-level record_outcome function."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             configure(mode="local")
             memories = await record_outcome("test-id", "worked")
 
@@ -913,7 +913,7 @@ class TestEdgeCases:
         """Test handling of empty search results."""
         mock_engine.search = AsyncMock(return_value=[])
 
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 results = await client.search("nonexistent query")
 
@@ -922,7 +922,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_multiple_memory_ids_outcome(self, mock_engine):
         """Test recording outcome for multiple memories."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 await client.record_outcome(
                     ["id1", "id2", "id3"],
@@ -935,7 +935,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_single_memory_id_as_string(self, mock_engine):
         """Test recording outcome with single ID as string."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 await client.record_outcome("single-id", "partial")
 
@@ -946,7 +946,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_categories_filter_in_search(self, mock_engine):
         """Test search with multiple categories filter."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 # Local mode only supports single category
                 await client.search(
@@ -960,7 +960,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_categories_multiple_filter_in_search(self, mock_engine):
         """Test search with multiple categories falls back to None."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 # Multiple categories - local mode passes None
                 await client.search(
@@ -974,7 +974,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_all_optional_parameters(self, mock_engine):
         """Test add with all optional parameters."""
-        with patch("memory_layer.core.engine.MemoryEngine", return_value=mock_engine):
+        with patch("runtime_memory.core.engine.MemoryEngine", return_value=mock_engine):
             async with MemoryClient(mode="local") as client:
                 await client.add(
                     content="Test content",

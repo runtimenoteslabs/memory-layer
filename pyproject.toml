@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "memory-layer-ai"
+name = "runtime-memory"
 dynamic = ["version"]
 description = "Persistent memory for AI coding agents with outcome-based learning"
 readme = "README.md"
@@ -56,15 +56,15 @@ server = [
 
 # Full installation - everything
 all = [
-    "memory-layer-ai[embedding,extraction,server]",
+    "runtime-memory[embedding,extraction,server]",
 ]
 
 # Legacy aliases for backward compatibility
 phase1 = [
-    "memory-layer-ai[embedding,extraction]",
+    "runtime-memory[embedding,extraction]",
 ]
 phase2 = [
-    "memory-layer-ai[server]",
+    "runtime-memory[server]",
 ]
 dev = [
     "pytest>=7.4.0",
@@ -78,7 +78,8 @@ dev = [
 ]
 
 [project.scripts]
-mem = "memory_layer.cli.main:cli"
+mem = "runtime_memory.cli.main:cli"
+rmem = "runtime_memory.cli.main:cli"
 
 # Hermes Agent discovers memory providers through this group, so installing this
 # package into a Hermes environment is enough to make it selectable with
@@ -86,7 +87,7 @@ mem = "memory_layer.cli.main:cli"
 # package: Hermes reads a provider's directory without importing it, and a bare
 # module has nowhere for the sibling plugin.yaml to live.
 [project.entry-points."hermes_agent.memory_providers"]
-memorylayer = "memory_layer.hermes"
+runtimememory = "runtime_memory.hermes"
 
 [project.urls]
 Homepage = "https://github.com/runtimenoteslabs/memory-layer"
@@ -96,10 +97,10 @@ Issues = "https://github.com/runtimenoteslabs/memory-layer/issues"
 Changelog = "https://github.com/runtimenoteslabs/memory-layer/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
-path = "src/memory_layer/__init__.py"
+path = "src/runtime_memory/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/memory_layer"]
+packages = ["src/runtime_memory"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -154,13 +155,13 @@ ignore = [
 # The Hermes plugin surface is shaped by Hermes, not by us: optional lifecycle
 # hooks are concrete no-ops rather than abstract methods, and handlers must keep
 # the full contract signature whether or not they read every argument.
-"src/memory_layer/hermes/_base.py" = ["ARG002", "B027"]
-"src/memory_layer/hermes/provider.py" = ["ARG002"]
-"src/memory_layer/hermes/tools.py" = ["ARG001"]
+"src/runtime_memory/hermes/_base.py" = ["ARG002", "B027"]
+"src/runtime_memory/hermes/provider.py" = ["ARG002"]
+"src/runtime_memory/hermes/tools.py" = ["ARG001"]
 "tests/unit/test_hermes_provider.py" = ["ARG001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["memory_layer"]
+known-first-party = ["runtime_memory"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -193,7 +194,7 @@ target-version = ["py311"]
 include = '\.pyi?$'
 
 [tool.coverage.run]
-source = ["src/memory_layer"]
+source = ["src/runtime_memory"]
 branch = true
 omit = [
     "*/tests/*",

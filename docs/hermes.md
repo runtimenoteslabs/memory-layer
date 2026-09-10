@@ -1,17 +1,17 @@
-# Using Memory Layer with Hermes Agent
+# Using Runtime Memory with Hermes Agent
 
 Hermes Agent stores memory in a small note file, capped at about 2200 characters.
 Everything in that file is pasted into every prompt, so raising the cap makes
 every turn more expensive.
 
-Memory Layer replaces that file with retrieval. The store is uncapped, and each
+Runtime Memory replaces that file with retrieval. The store is uncapped, and each
 turn receives only the memories relevant to it, ranked partly by whether they
 have worked before. It is the same SQLite database Claude Code and any MCP client
 already use, so a fact learned in one tool is available in the others.
 
 ## Install
 
-Memory Layer runs in-process as a Hermes memory provider, so install it into the
+Runtime Memory runs in-process as a Hermes memory provider, so install it into the
 Python environment Hermes itself runs in.
 
 ```bash
@@ -19,27 +19,26 @@ Python environment Hermes itself runs in.
 realpath "$(command -v hermes)"
 
 # Install into it (adjust the path to match)
-~/.hermes/hermes-agent/venv/bin/python -m pip install \
-    git+https://github.com/runtimenoteslabs/memory-layer.git
+~/.hermes/hermes-agent/venv/bin/python -m pip install runtime-memory
 
 # Activate it
-hermes config set memory.provider memorylayer
+hermes config set memory.provider runtimememory
 ```
 
-Memory Layer is installed from GitHub, not PyPI. An unrelated package holds
-the name `memory-layer` on PyPI, so `pip install memory-layer` fetches that one
-instead.
+The distribution is `runtime-memory` and it imports as `runtime_memory`. The
+repository is still named memory-layer, and an unrelated package holds
+`memory-layer` on PyPI, so neither of those names installs this project.
 
 Restart Hermes, or run `/reset`. Hermes finds the provider through the
 `hermes_agent.memory_providers` entry point, so you do not edit its code or
-config files by hand. Once installed, `hermes memory setup` lists `memorylayer`.
+config files by hand. Once installed, `hermes memory setup` lists `runtimememory`.
 
 The base install adds `aiosqlite`, `numpy`, and `watchdog`. For semantic search,
 add the embedding extra:
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python -m pip install \
-    'memory-layer-ai[embedding] @ git+https://github.com/runtimenoteslabs/memory-layer.git'
+    'runtime-memory[embedding]'
 ```
 
 Without the extra, retrieval uses only the BM25 half of the hybrid. With it, the
@@ -56,7 +55,7 @@ beyond the provider name.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MEMORY_LAYER_DB` | `~/.memory-layer/memories.db` | The shared store |
+| `MEMORY_LAYER_DB` | `~/.runtime-memory/memories.db` | The shared store |
 | `MEMORY_LAYER_EMBEDDING` | `local` | `local`, `null`, `mock`, `openai`, `voyage` |
 | `MEMORY_LAYER_RECALL_LIMIT` | `8` | Memories injected per turn |
 | `MEMORY_LAYER_MIN_SCORE` | `0.0` | Relevance floor for injection |
@@ -78,10 +77,10 @@ share it. The provider reports its path through `backup_paths()`, so
 
 | Tool | Purpose |
 |------|---------|
-| `memorylayer_remember` | Save a durable fact with a category |
-| `memorylayer_recall` | Search memory directly |
-| `memorylayer_outcome` | Report whether recalled memories helped |
-| `memorylayer_stats` | Summarize the store |
+| `runtimememory_remember` | Save a durable fact with a category |
+| `runtimememory_recall` | Search memory directly |
+| `runtimememory_outcome` | Report whether recalled memories helped |
+| `runtimememory_stats` | Summarize the store |
 
 ## How memories are written
 
@@ -106,7 +105,7 @@ needs several successes to recover its ranking.
 
 Injected memories carry their id and their track record, so the model can cite a
 specific memory and can see that it has failed before. Calling
-`memorylayer_outcome` with no ids scores whatever was recalled for that turn.
+`runtimememory_outcome` with no ids scores whatever was recalled for that turn.
 
 ## Evaluation trace
 
@@ -139,5 +138,5 @@ breaks a turn.
   correct.
 - **The provider tracks Hermes' plugin API.** It imports `MemoryProvider` from
   Hermes and needs updating if that contract changes. Importing
-  `memory_layer.hermes` outside Hermes falls back to a local shim, so the package
+  `runtime_memory.hermes` outside Hermes falls back to a local shim, so the package
   stays importable and testable without Hermes installed.

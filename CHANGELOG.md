@@ -1,6 +1,46 @@
 # Changelog
 
-All notable changes to memory-layer will be documented in this file.
+All notable changes to Runtime Memory will be documented in this file.
+
+## [3.0.0] - 2026-09-11
+
+The project is now **Runtime Memory**, published as `runtime-memory` and
+imported as `runtime_memory`. The repository keeps its original name.
+
+PyPI refused `memory-layer-ai` as too similar to an existing project, the
+abandoned `memory-layer` placeholder. Rather than pick another variation on a
+generic phrase, the package took a name of its own that matches the
+runtimenoteslabs work it belongs to. No release before this one reached PyPI,
+so nothing installed from there is affected.
+
+### Changed
+
+- **Distribution is `runtime-memory`**, previously `memory-layer-ai`. It was
+  only ever published to TestPyPI under the old name.
+- **Import is `runtime_memory`**, previously `memory_layer`. The distribution
+  and import names now match, which is what lets Hermes resolve the provider
+  with no mapping on its side.
+- **Environment variables use the `RUNTIME_MEMORY_` prefix.** Any
+  `MEMORY_LAYER_` variable still set is carried onto its current name at import,
+  so an agent config written before the rename keeps working. An explicitly set
+  current name always wins.
+- **The store lives in `~/.runtime-memory/`.** When that directory does not
+  exist and `~/.memory-layer/` does, the old one is used, so an existing install
+  keeps its memories rather than starting empty. Move the directory when
+  convenient.
+- **The Hermes provider is `runtimememory`**, and its tools are
+  `runtimememory_remember`, `_recall`, `_outcome` and `_stats`. Update Hermes
+  with `hermes config set memory.provider runtimememory`.
+- The Claude Code plugin and the bundled MCP server entry are both named
+  `runtime-memory`.
+
+### Added
+
+- `rmem` as a second console script. `mem` is unchanged and both run the same
+  CLI.
+- `plugin.yaml` declares `pip_dependencies: ["runtime-memory"]`. Hermes checks a
+  dependency by importing `dist_name.replace("-", "_")`, which resolves for this
+  package without the upstream name mapping its bundled providers need.
 
 ## [2.2.2] - 2026-09-10
 
@@ -121,6 +161,7 @@ All notable changes to memory-layer will be documented in this file.
 - Production hardening: a custom exception hierarchy with readable messages,
   configuration handling, and observability.
 
+[3.0.0]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v3.0.0
 [2.2.2]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.2
 [2.2.1]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.1
 [2.2.0]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.0

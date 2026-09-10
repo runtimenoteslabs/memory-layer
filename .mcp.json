@@ -1,13 +1,13 @@
 {
   "mcpServers": {
-    "memory-layer": {
+    "runtime-memory": {
       "command": "mem",
       "args": ["serve", "--mcp"],
       "env": {
-        "MEMORY_LAYER_DB": "~/.memory-layer/memories.db",
-        "MEMORY_LAYER_LOG_LEVEL": "WARNING"
+        "RUNTIME_MEMORY_DB": "~/.runtime-memory/memories.db",
+        "RUNTIME_MEMORY_LOG_LEVEL": "WARNING"
       },
-      "description": "Memory Layer MCP server - persistent memory with outcome-based learning"
+      "description": "Runtime Memory MCP server - persistent memory with outcome-based learning"
     }
   }
 }

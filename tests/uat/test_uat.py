@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Memory Layer - User Acceptance Test Script
+Runtime Memory - User Acceptance Test Script
 
 Tests REST API, Python SDK, and MCP tools from an end-user perspective.
 
@@ -125,8 +125,8 @@ class APITests:
 
         with self.runner.temp_database() as db_path:
             # Start embedded test server
-            from memory_layer.server.api import create_app
-            from memory_layer.core.engine import MemoryEngine, EngineConfig
+            from runtime_memory.server.api import create_app
+            from runtime_memory.core.engine import MemoryEngine, EngineConfig
 
             config = EngineConfig(db_path=str(db_path), secure_permissions=False)
             engine = MemoryEngine(config=config)
@@ -335,7 +335,7 @@ class SDKTests:
 
     async def _test_async_client(self, db_path: Path):
         """14.1.x: Async client tests."""
-        from memory_layer.sdk.client import MemoryClient, ClientConfig
+        from runtime_memory.sdk.client import MemoryClient, ClientConfig
 
         config = ClientConfig(db_path=str(db_path))
 
@@ -426,7 +426,7 @@ class SDKTests:
 
         def run_sync_tests():
             """Run sync tests in a thread (separate event loop)."""
-            from memory_layer.sdk.client import SyncMemoryClient, ClientConfig
+            from runtime_memory.sdk.client import SyncMemoryClient, ClientConfig
             results = []
 
             config = ClientConfig(db_path=str(db_path))
@@ -481,7 +481,7 @@ class SDKTests:
 
     async def _test_module_functions(self, db_path: Path):
         """14.4.x: Module-level convenience functions."""
-        import memory_layer.sdk.client as sdk
+        import runtime_memory.sdk.client as sdk
 
         # Reset global client
         sdk._global_client = None
@@ -541,8 +541,8 @@ class MCPTests:
         print("=" * 60)
 
         with self.runner.temp_database() as db_path:
-            from memory_layer.server.mcp import MCPServer
-            from memory_layer.core.engine import MemoryEngine, EngineConfig
+            from runtime_memory.server.mcp import MCPServer
+            from runtime_memory.core.engine import MemoryEngine, EngineConfig
 
             config = EngineConfig(db_path=str(db_path), secure_permissions=False)
             engine = MemoryEngine(config=config)
@@ -565,7 +565,7 @@ class MCPTests:
 
     async def _call_tool(self, server, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Helper to call an MCP tool."""
-        from memory_layer.server.mcp import MCPRequest
+        from runtime_memory.server.mcp import MCPRequest
 
         request = MCPRequest.from_dict({
             "jsonrpc": "2.0",
@@ -581,7 +581,7 @@ class MCPTests:
 
     async def _test_list_tools(self, server):
         """15.1: List tools."""
-        from memory_layer.server.mcp import MCPRequest
+        from runtime_memory.server.mcp import MCPRequest
 
         start = time.time()
         try:
@@ -753,7 +753,7 @@ class MCPTests:
 # =============================================================================
 
 async def main():
-    parser = argparse.ArgumentParser(description="Memory Layer UAT Tests")
+    parser = argparse.ArgumentParser(description="Runtime Memory UAT Tests")
     parser.add_argument("--api", action="store_true", help="Run REST API tests only")
     parser.add_argument("--sdk", action="store_true", help="Run SDK tests only")
     parser.add_argument("--mcp", action="store_true", help="Run MCP tests only")
@@ -766,7 +766,7 @@ async def main():
     runner = TestRunner(verbose=args.verbose)
 
     print("=" * 60)
-    print("Memory Layer - User Acceptance Tests")
+    print("Runtime Memory - User Acceptance Tests")
     print("=" * 60)
 
     if run_all or args.api:

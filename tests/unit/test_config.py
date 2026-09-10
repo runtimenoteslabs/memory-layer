@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from memory_layer.core.config import (
+from runtime_memory.core.config import (
     DatabaseConfig,
     EmbeddingConfig,
     Environment,
@@ -243,7 +243,7 @@ class TestSettings:
         settings = Settings(anthropic_api_key="sk-test")
         assert settings.validate_for_extraction() is True
 
-    @patch.dict(os.environ, {"MEMORY_LAYER_ENV": "production"})
+    @patch.dict(os.environ, {"RUNTIME_MEMORY_ENV": "production"})
     def test_env_override(self):
         """Test environment variable override."""
         clear_settings_cache()
@@ -275,11 +275,16 @@ class TestSettingsCache:
 class TestPathHelpers:
     """Tests for path helper functions."""
 
-    def test_get_config_path(self):
+    def test_get_config_path(self, tmp_path, monkeypatch):
         """Test config path creation."""
+        # Home is redirected because the real one may still hold the pre-3.0
+        # directory, which the store falls back to.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
         path = get_config_path()
+
         assert path.exists()
-        assert path.name == ".memory-layer"
+        assert path.name == ".runtime-memory"
 
     def test_get_data_path(self):
         """Test data path creation."""
@@ -299,7 +304,7 @@ class TestEnvHelpers:
 
     def test_get_env(self):
         """Test basic env getter."""
-        with patch.dict(os.environ, {"MEMORY_LAYER_TEST_VAR": "test_value"}):
+        with patch.dict(os.environ, {"RUNTIME_MEMORY_TEST_VAR": "test_value"}):
             assert get_env("TEST_VAR") == "test_value"
 
     def test_get_env_default(self):
@@ -309,13 +314,13 @@ class TestEnvHelpers:
     def test_get_env_bool_true(self):
         """Test boolean env getter with true values."""
         for value in ["true", "True", "1", "yes", "on", "YES"]:
-            with patch.dict(os.environ, {"MEMORY_LAYER_BOOL_VAR": value}):
+            with patch.dict(os.environ, {"RUNTIME_MEMORY_BOOL_VAR": value}):
                 assert get_env_bool("BOOL_VAR") is True
 
     def test_get_env_bool_false(self):
         """Test boolean env getter with false values."""
         for value in ["false", "0", "no", "off"]:
-            with patch.dict(os.environ, {"MEMORY_LAYER_BOOL_VAR": value}):
+            with patch.dict(os.environ, {"RUNTIME_MEMORY_BOOL_VAR": value}):
                 assert get_env_bool("BOOL_VAR") is False
 
     def test_get_env_bool_default(self):
@@ -325,22 +330,22 @@ class TestEnvHelpers:
 
     def test_get_env_int(self):
         """Test integer env getter."""
-        with patch.dict(os.environ, {"MEMORY_LAYER_INT_VAR": "42"}):
+        with patch.dict(os.environ, {"RUNTIME_MEMORY_INT_VAR": "42"}):
             assert get_env_int("INT_VAR") == 42
 
     def test_get_env_int_invalid(self):
         """Test integer env getter with invalid value."""
-        with patch.dict(os.environ, {"MEMORY_LAYER_INT_VAR": "not_a_number"}):
+        with patch.dict(os.environ, {"RUNTIME_MEMORY_INT_VAR": "not_a_number"}):
             assert get_env_int("INT_VAR", 10) == 10
 
     def test_get_env_float(self):
         """Test float env getter."""
-        with patch.dict(os.environ, {"MEMORY_LAYER_FLOAT_VAR": "3.14"}):
+        with patch.dict(os.environ, {"RUNTIME_MEMORY_FLOAT_VAR": "3.14"}):
             assert get_env_float("FLOAT_VAR") == 3.14
 
     def test_get_env_float_invalid(self):
         """Test float env getter with invalid value."""
-        with patch.dict(os.environ, {"MEMORY_LAYER_FLOAT_VAR": "not_a_float"}):
+        with patch.dict(os.environ, {"RUNTIME_MEMORY_FLOAT_VAR": "not_a_float"}):
             assert get_env_float("FLOAT_VAR", 1.0) == 1.0
 
 
@@ -350,8 +355,8 @@ class TestNestedConfig:
     @patch.dict(
         os.environ,
         {
-            "MEMORY_LAYER_DATABASE__POOL_SIZE": "10",
-            "MEMORY_LAYER_SERVER__PORT": "9000",
+            "RUNTIME_MEMORY_DATABASE__POOL_SIZE": "10",
+            "RUNTIME_MEMORY_SERVER__PORT": "9000",
         },
     )
     def test_nested_env_override(self):

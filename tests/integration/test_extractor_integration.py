@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from memory_layer.core.models import MemoryCategory
-from memory_layer.extraction.extractor import (
+from runtime_memory.core.models import MemoryCategory
+from runtime_memory.extraction.extractor import (
     ExtractionConfig,
     MemoryExtractor,
     extract_from_transcript,

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from memory_layer.core.models import (
+from runtime_memory.core.models import (
     Entity,
     EntityType,
     MemoryCategory,

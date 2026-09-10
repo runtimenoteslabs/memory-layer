@@ -17,13 +17,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory_layer.tasks.models import (
+from runtime_memory.tasks.models import (
     ClaudeCodeTask,
     ClaudeCodeTaskStatus,
     TaskSource,
     TaskSyncResult,
 )
-from memory_layer.tasks.claude_code_parser import ClaudeCodeParser
+from runtime_memory.tasks.claude_code_parser import ClaudeCodeParser
 
 
 # =============================================================================
@@ -478,7 +478,7 @@ class TestClaudeCodeAdapter:
     @pytest.mark.asyncio
     async def test_adapter_creation(self, mock_engine):
         """Test creating an adapter."""
-        from memory_layer.tasks.claude_code_adapter import ClaudeCodeAdapter
+        from runtime_memory.tasks.claude_code_adapter import ClaudeCodeAdapter
 
         adapter = ClaudeCodeAdapter(mock_engine)
         assert adapter is not None
@@ -487,7 +487,7 @@ class TestClaudeCodeAdapter:
     @pytest.mark.asyncio
     async def test_adapter_with_explicit_dir(self, mock_engine):
         """Test adapter with explicit directory."""
-        from memory_layer.tasks.claude_code_adapter import ClaudeCodeAdapter
+        from runtime_memory.tasks.claude_code_adapter import ClaudeCodeAdapter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter = ClaudeCodeAdapter(mock_engine, todos_dir=tmpdir)
@@ -496,7 +496,7 @@ class TestClaudeCodeAdapter:
     @pytest.mark.asyncio
     async def test_adapter_initialize(self, mock_engine):
         """Test initializing the adapter."""
-        from memory_layer.tasks.claude_code_adapter import ClaudeCodeAdapter
+        from runtime_memory.tasks.claude_code_adapter import ClaudeCodeAdapter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter = ClaudeCodeAdapter(mock_engine, todos_dir=tmpdir)
@@ -506,7 +506,7 @@ class TestClaudeCodeAdapter:
     @pytest.mark.asyncio
     async def test_list_tasks(self, mock_engine):
         """Test listing tasks through adapter."""
-        from memory_layer.tasks.claude_code_adapter import ClaudeCodeAdapter
+        from runtime_memory.tasks.claude_code_adapter import ClaudeCodeAdapter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             task_file = Path(tmpdir) / "session-agent.json"
@@ -521,7 +521,7 @@ class TestClaudeCodeAdapter:
     @pytest.mark.asyncio
     async def test_get_current_task(self, mock_engine):
         """Test getting current (in progress) task."""
-        from memory_layer.tasks.claude_code_adapter import ClaudeCodeAdapter
+        from runtime_memory.tasks.claude_code_adapter import ClaudeCodeAdapter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             task_file = Path(tmpdir) / "session-agent.json"
@@ -540,7 +540,7 @@ class TestClaudeCodeAdapter:
     @pytest.mark.asyncio
     async def test_null_adapter(self, mock_engine):
         """Test null adapter for unavailable Claude Code."""
-        from memory_layer.tasks.claude_code_adapter import NullClaudeCodeAdapter
+        from runtime_memory.tasks.claude_code_adapter import NullClaudeCodeAdapter
 
         adapter = NullClaudeCodeAdapter()
         assert adapter.is_available is False
@@ -575,7 +575,7 @@ class TestUnifiedTaskAdapter:
     @pytest.mark.asyncio
     async def test_adapter_creation(self, mock_engine):
         """Test creating unified adapter."""
-        from memory_layer.tasks.unified_adapter import UnifiedTaskAdapter
+        from runtime_memory.tasks.unified_adapter import UnifiedTaskAdapter
 
         adapter = UnifiedTaskAdapter(mock_engine)
         assert adapter is not None
@@ -583,7 +583,7 @@ class TestUnifiedTaskAdapter:
     @pytest.mark.asyncio
     async def test_adapter_initialize(self, mock_engine):
         """Test initializing unified adapter."""
-        from memory_layer.tasks.unified_adapter import UnifiedTaskAdapter
+        from runtime_memory.tasks.unified_adapter import UnifiedTaskAdapter
 
         adapter = UnifiedTaskAdapter(mock_engine)
         await adapter.initialize()
@@ -592,7 +592,7 @@ class TestUnifiedTaskAdapter:
     @pytest.mark.asyncio
     async def test_available_sources(self, mock_engine):
         """Test checking available sources."""
-        from memory_layer.tasks.unified_adapter import UnifiedTaskAdapter
+        from runtime_memory.tasks.unified_adapter import UnifiedTaskAdapter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter = UnifiedTaskAdapter(mock_engine, todos_dir=tmpdir)
@@ -606,7 +606,7 @@ class TestUnifiedTaskAdapter:
     @pytest.mark.asyncio
     async def test_list_tasks_unified(self, mock_engine):
         """Test listing tasks from all sources."""
-        from memory_layer.tasks.unified_adapter import UnifiedTaskAdapter
+        from runtime_memory.tasks.unified_adapter import UnifiedTaskAdapter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             task_file = Path(tmpdir) / "session-agent.json"
@@ -626,7 +626,7 @@ class TestUnifiedTaskAdapter:
     @pytest.mark.asyncio
     async def test_get_task_auto_detect_source(self, mock_engine):
         """Test getting task with auto-detected source."""
-        from memory_layer.tasks.unified_adapter import UnifiedTaskAdapter
+        from runtime_memory.tasks.unified_adapter import UnifiedTaskAdapter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             task_file = Path(tmpdir) / "abc12345-agent-def.json"
@@ -643,7 +643,7 @@ class TestUnifiedTaskAdapter:
     @pytest.mark.asyncio
     async def test_unified_task_properties(self, mock_engine):
         """Test UnifiedTask wrapper properties."""
-        from memory_layer.tasks.unified_adapter import UnifiedTask
+        from runtime_memory.tasks.unified_adapter import UnifiedTask
 
         cc_task = ClaudeCodeTask(
             id="cc-test-0",
@@ -663,7 +663,7 @@ class TestUnifiedTaskAdapter:
     @pytest.mark.asyncio
     async def test_sync_all(self, mock_engine):
         """Test syncing all sources."""
-        from memory_layer.tasks.unified_adapter import UnifiedTaskAdapter
+        from runtime_memory.tasks.unified_adapter import UnifiedTaskAdapter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             task_file = Path(tmpdir) / "session-agent.json"
@@ -690,7 +690,7 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_full_workflow(self):
         """Test full workflow: parse -> list -> get context."""
-        from memory_layer.tasks import ClaudeCodeParser, ClaudeCodeTaskStatus
+        from runtime_memory.tasks import ClaudeCodeParser, ClaudeCodeTaskStatus
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create test data

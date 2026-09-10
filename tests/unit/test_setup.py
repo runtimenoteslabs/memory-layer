@@ -14,16 +14,16 @@ class TestProjectSetup:
 
     def test_package_import(self) -> None:
         """Test that the main package can be imported."""
-        import memory_layer
+        import runtime_memory
 
         # Assert a valid semver string rather than a literal, so version
         # bumps don't break this test (version is sourced from __init__.py).
-        assert re.match(r"^\d+\.\d+\.\d+", memory_layer.__version__)
-        assert memory_layer.__author__ == "Memory Layer Team"
+        assert re.match(r"^\d+\.\d+\.\d+", runtime_memory.__version__)
+        assert runtime_memory.__author__ == "exitcode42"
 
     def test_core_import(self) -> None:
         """Test that core module can be imported."""
-        from memory_layer import core
+        from runtime_memory import core
 
         assert hasattr(core, "get_logger")
         assert hasattr(core, "setup_logging")
@@ -34,51 +34,51 @@ class TestLogging:
 
     def test_setup_logging_default(self) -> None:
         """Test default logging setup."""
-        from memory_layer.core.logging import setup_logging
+        from runtime_memory.core.logging import setup_logging
 
         logger = setup_logging()
-        assert logger.name == "memory_layer"
+        assert logger.name == "runtime_memory"
         assert logger.level == logging.INFO
 
     def test_setup_logging_debug_level(self) -> None:
         """Test logging setup with debug level."""
-        from memory_layer.core.logging import setup_logging
+        from runtime_memory.core.logging import setup_logging
 
         logger = setup_logging(level=logging.DEBUG)
         assert logger.level == logging.DEBUG
 
     def test_setup_logging_string_level(self) -> None:
         """Test logging setup with string level."""
-        from memory_layer.core.logging import setup_logging
+        from runtime_memory.core.logging import setup_logging
 
         logger = setup_logging(level="WARNING")
         assert logger.level == logging.WARNING
 
     def test_get_logger(self) -> None:
         """Test getting a module-specific logger."""
-        from memory_layer.core.logging import get_logger
+        from runtime_memory.core.logging import get_logger
 
         logger = get_logger("test_module")
-        assert logger.name == "memory_layer.test_module"
+        assert logger.name == "runtime_memory.test_module"
 
     def test_get_logger_does_not_double_the_package_prefix(self) -> None:
         """Callers pass __name__, which already starts with the package name."""
-        from memory_layer.core.logging import get_logger
+        from runtime_memory.core.logging import get_logger
 
-        logger = get_logger("memory_layer.core.embeddings")
-        assert logger.name == "memory_layer.core.embeddings"
-        assert get_logger("memory_layer").name == "memory_layer"
+        logger = get_logger("runtime_memory.core.embeddings")
+        assert logger.name == "runtime_memory.core.embeddings"
+        assert get_logger("runtime_memory").name == "runtime_memory"
 
     def test_get_logger_keeps_names_under_the_package(self) -> None:
-        """setup_logging attaches handlers to `memory_layer`, so names must sit under it."""
-        from memory_layer.core.logging import get_logger
+        """setup_logging attaches handlers to `runtime_memory`, so names must sit under it."""
+        from runtime_memory.core.logging import get_logger
 
-        assert get_logger("memory_layer.core.engine").name.startswith("memory_layer")
-        assert get_logger("outside_caller").name.startswith("memory_layer.")
+        assert get_logger("runtime_memory.core.engine").name.startswith("runtime_memory")
+        assert get_logger("outside_caller").name.startswith("runtime_memory.")
 
     def test_setup_logging_json_output(self) -> None:
         """Test logging setup with JSON output."""
-        from memory_layer.core.logging import JSONFormatter, setup_logging
+        from runtime_memory.core.logging import JSONFormatter, setup_logging
 
         logger = setup_logging(json_output=True)
         assert len(logger.handlers) > 0
@@ -88,7 +88,7 @@ class TestLogging:
         """Test JSON formatter produces valid output."""
         import json
 
-        from memory_layer.core.logging import JSONFormatter
+        from runtime_memory.core.logging import JSONFormatter
 
         formatter = JSONFormatter()
         record = logging.LogRecord(
@@ -109,7 +109,7 @@ class TestLogging:
 
     def test_setup_logging_with_file(self, temp_dir: Path) -> None:
         """Test logging setup with file output."""
-        from memory_layer.core.logging import setup_logging
+        from runtime_memory.core.logging import setup_logging
 
         log_file = temp_dir / "test.log"
         logger = setup_logging(log_file=str(log_file))
@@ -125,7 +125,7 @@ class TestLogging:
 
     def test_console_formatter_no_colors(self) -> None:
         """Test console formatter without colors."""
-        from memory_layer.core.logging import ConsoleFormatter
+        from runtime_memory.core.logging import ConsoleFormatter
 
         formatter = ConsoleFormatter(use_colors=False)
         record = logging.LogRecord(
@@ -149,7 +149,7 @@ class TestDirectoryStructure:
 
     def test_src_structure(self) -> None:
         """Test that source directory structure exists."""
-        src_root = Path(__file__).parent.parent.parent / "src" / "memory_layer"
+        src_root = Path(__file__).parent.parent.parent / "src" / "runtime_memory"
 
         expected_dirs = [
             "core",

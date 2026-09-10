@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory_layer.core.models import Memory, MemoryCategory, MemorySource
-from memory_layer.extraction.extractor import (
+from runtime_memory.core.models import Memory, MemoryCategory, MemorySource
+from runtime_memory.extraction.extractor import (
     ENTITY_PATTERNS,
     EXTRACTION_SYSTEM_PROMPT,
     ConflictRelationship,
@@ -219,10 +219,10 @@ class TestEntityDetection:
 
     def test_detect_python_import(self) -> None:
         """Test Python import detection."""
-        text = "Add: from memory_layer.core import MemoryEngine"
+        text = "Add: from runtime_memory.core import MemoryEngine"
         entities = detect_entities(text)
         assert "module" in entities
-        assert "memory_layer.core" in entities["module"]
+        assert "runtime_memory.core" in entities["module"]
 
     def test_detect_error_type(self) -> None:
         """Test error type detection."""

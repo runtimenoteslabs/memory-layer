@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
-from memory_layer.core.models import Memory, MemoryCategory
-from memory_layer.plugin import (
+from runtime_memory.core.models import Memory, MemoryCategory
+from runtime_memory.plugin import (
     ContextFormatter,
     HookContext,
     SessionManager,

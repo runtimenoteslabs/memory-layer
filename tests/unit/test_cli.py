@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from memory_layer.cli.main import cli
-from memory_layer.core.models import (
+from runtime_memory.cli.main import cli
+from runtime_memory.core.models import (
     ContextResponse,
     Memory,
     MemoryCategory,
@@ -29,8 +29,8 @@ from memory_layer.core.models import (
     MemorySource,
     SearchResult,
 )
-from memory_layer.core.engine import EngineStats
-from memory_layer.core.storage import StorageStats
+from runtime_memory.core.engine import EngineStats
+from runtime_memory.core.storage import StorageStats
 
 
 # =============================================================================
@@ -154,7 +154,7 @@ class TestCLIGroup:
         """Test CLI help output."""
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
-        assert "Memory Layer" in result.output
+        assert "Runtime Memory" in result.output
         assert "Store, search, and manage memories" in result.output
 
     def test_cli_verbose_flag(self, runner):
@@ -178,7 +178,7 @@ class TestAddCommand:
 
     def test_add_basic(self, runner, mock_engine):
         """Test basic memory addition."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, [
                 "add", "Use snake_case for Python", "-c", "convention"
             ])
@@ -189,7 +189,7 @@ class TestAddCommand:
 
     def test_add_with_project(self, runner, mock_engine):
         """Test adding memory with project."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, [
                 "add", "Test content", "-c", "general", "-p", "myproject"
             ])
@@ -201,7 +201,7 @@ class TestAddCommand:
 
     def test_add_with_tags(self, runner, mock_engine):
         """Test adding memory with tags."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, [
                 "add", "Test content", "-c", "general", "--tags", "python,naming,style"
             ])
@@ -212,7 +212,7 @@ class TestAddCommand:
 
     def test_add_with_importance(self, runner, mock_engine):
         """Test adding memory with importance."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, [
                 "add", "Important content", "-c", "decision", "--importance", "0.9"
             ])
@@ -223,7 +223,7 @@ class TestAddCommand:
 
     def test_add_json_output(self, runner, mock_engine):
         """Test add with JSON output."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, [
                 "--json-output", "add", "Test content", "-c", "general"
             ])
@@ -243,7 +243,7 @@ class TestAddCommand:
         ]
 
         for cat in categories:
-            with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+            with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
                 result = runner.invoke(cli, ["add", "Test", "-c", cat])
                 assert result.exit_code == 0, f"Failed for category: {cat}"
 
@@ -258,7 +258,7 @@ class TestSearchCommand:
 
     def test_search_basic(self, runner, mock_engine):
         """Test basic search."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "authentication"])
 
         assert result.exit_code == 0
@@ -266,7 +266,7 @@ class TestSearchCommand:
 
     def test_search_with_limit(self, runner, mock_engine):
         """Test search with limit."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "test", "-l", "10"])
 
         assert result.exit_code == 0
@@ -275,7 +275,7 @@ class TestSearchCommand:
 
     def test_search_with_category_filter(self, runner, mock_engine):
         """Test search with category filter."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "test", "-c", "convention"])
 
         assert result.exit_code == 0
@@ -284,7 +284,7 @@ class TestSearchCommand:
 
     def test_search_with_project_filter(self, runner, mock_engine):
         """Test search with project filter."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "test", "-p", "myproject"])
 
         assert result.exit_code == 0
@@ -293,7 +293,7 @@ class TestSearchCommand:
 
     def test_search_with_min_score(self, runner, mock_engine):
         """Test search with minimum score filter."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "test", "--min-score", "0.5"])
 
         assert result.exit_code == 0
@@ -302,7 +302,7 @@ class TestSearchCommand:
 
     def test_search_detailed_format(self, runner, mock_engine):
         """Test search with detailed format."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "test", "--format", "detailed"])
 
         assert result.exit_code == 0
@@ -310,14 +310,14 @@ class TestSearchCommand:
 
     def test_search_context_format(self, runner, mock_engine):
         """Test search with context format."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "test", "--format", "context"])
 
         assert result.exit_code == 0
 
     def test_search_json_output(self, runner, mock_engine):
         """Test search with JSON output."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["--json-output", "search", "test"])
 
         assert result.exit_code == 0
@@ -327,7 +327,7 @@ class TestSearchCommand:
     def test_search_no_results(self, runner, mock_engine):
         """Test search with no results."""
         mock_engine.search = AsyncMock(return_value=[])
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "nonexistent"])
 
         assert result.exit_code == 0
@@ -344,7 +344,7 @@ class TestShowCommand:
 
     def test_show_basic(self, runner, mock_engine):
         """Test showing a memory."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["show", "test-mem-001"])
 
         assert result.exit_code == 0
@@ -354,7 +354,7 @@ class TestShowCommand:
 
     def test_show_json_output(self, runner, mock_engine):
         """Test show with JSON output."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["--json-output", "show", "test-mem-001"])
 
         assert result.exit_code == 0
@@ -365,7 +365,7 @@ class TestShowCommand:
         """Test showing non-existent memory."""
         mock_engine.get = AsyncMock(return_value=None)
         mock_engine.list = AsyncMock(return_value=[])  # No memories to match
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["show", "nonexistent"])
 
         assert result.exit_code != 0
@@ -382,14 +382,14 @@ class TestListCommand:
 
     def test_list_basic(self, runner, mock_engine):
         """Test basic listing."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["list"])
 
         assert result.exit_code == 0
 
     def test_list_with_limit(self, runner, mock_engine):
         """Test listing with limit."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["list", "-l", "5"])
 
         assert result.exit_code == 0
@@ -398,7 +398,7 @@ class TestListCommand:
 
     def test_list_with_category(self, runner, mock_engine):
         """Test listing with category filter."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["list", "-c", "convention"])
 
         assert result.exit_code == 0
@@ -407,7 +407,7 @@ class TestListCommand:
 
     def test_list_with_project(self, runner, mock_engine):
         """Test listing with project filter."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["list", "-p", "myproject"])
 
         assert result.exit_code == 0
@@ -416,7 +416,7 @@ class TestListCommand:
 
     def test_list_with_archived(self, runner, mock_engine):
         """Test listing with archived flag."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["list", "--archived"])
 
         assert result.exit_code == 0
@@ -425,7 +425,7 @@ class TestListCommand:
 
     def test_list_json_output(self, runner, mock_engine):
         """Test list with JSON output."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["--json-output", "list"])
 
         assert result.exit_code == 0
@@ -435,7 +435,7 @@ class TestListCommand:
     def test_list_empty(self, runner, mock_engine):
         """Test listing with no results."""
         mock_engine.list = AsyncMock(return_value=[])
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["list"])
 
         assert result.exit_code == 0
@@ -452,7 +452,7 @@ class TestDeleteCommand:
 
     def test_delete_with_confirm(self, runner, mock_engine):
         """Test deleting with confirm flag."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["delete", "test-mem-001", "--confirm"])
 
         assert result.exit_code == 0
@@ -461,7 +461,7 @@ class TestDeleteCommand:
 
     def test_delete_interactive_yes(self, runner, mock_engine):
         """Test delete with interactive confirmation (yes)."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["delete", "test-mem-001"], input="y\n")
 
         assert result.exit_code == 0
@@ -469,7 +469,7 @@ class TestDeleteCommand:
 
     def test_delete_interactive_no(self, runner, mock_engine):
         """Test delete with interactive confirmation (no)."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["delete", "test-mem-001"], input="n\n")
 
         assert result.exit_code == 0
@@ -480,7 +480,7 @@ class TestDeleteCommand:
         """Test deleting non-existent memory."""
         mock_engine.delete = AsyncMock(return_value=False)
         mock_engine.list = AsyncMock(return_value=[])  # No memories to match
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["delete", "nonexistent", "--confirm"])
 
         assert result.exit_code != 0
@@ -497,7 +497,7 @@ class TestOutcomeCommand:
 
     def test_outcome_worked(self, runner, mock_engine):
         """Test recording worked outcome."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["outcome", "test-mem-001", "worked"])
 
         assert result.exit_code == 0
@@ -506,7 +506,7 @@ class TestOutcomeCommand:
 
     def test_outcome_failed(self, runner, mock_engine):
         """Test recording failed outcome."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["outcome", "test-mem-001", "failed"])
 
         assert result.exit_code == 0
@@ -515,7 +515,7 @@ class TestOutcomeCommand:
 
     def test_outcome_partial(self, runner, mock_engine):
         """Test recording partial outcome."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["outcome", "test-mem-001", "partial"])
 
         assert result.exit_code == 0
@@ -526,7 +526,7 @@ class TestOutcomeCommand:
         """Test outcome for non-existent memory."""
         mock_engine.record_outcome = AsyncMock(return_value=False)
         mock_engine.list = AsyncMock(return_value=[])  # No memories to match
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["outcome", "nonexistent", "worked"])
 
         assert result.exit_code != 0
@@ -534,7 +534,7 @@ class TestOutcomeCommand:
 
     def test_outcome_invalid_result(self, runner, mock_engine):
         """Test outcome with invalid result type."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["outcome", "test-mem-001", "invalid"])
 
         assert result.exit_code != 0
@@ -550,14 +550,14 @@ class TestContextCommand:
 
     def test_context_basic(self, runner, mock_engine):
         """Test basic context retrieval."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["context"])
 
         assert result.exit_code == 0
 
     def test_context_with_project(self, runner, mock_engine):
         """Test context with project."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["context", "-p", "/path/to/project"])
 
         assert result.exit_code == 0
@@ -566,7 +566,7 @@ class TestContextCommand:
 
     def test_context_with_limit(self, runner, mock_engine):
         """Test context with limit."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["context", "-l", "5"])
 
         assert result.exit_code == 0
@@ -575,14 +575,14 @@ class TestContextCommand:
 
     def test_context_inject_flag(self, runner, mock_engine):
         """Test context with inject flag."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["context", "--inject"])
 
         assert result.exit_code == 0
 
     def test_context_json_format(self, runner, mock_engine):
         """Test context with JSON format."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["context", "--format", "json"])
 
         assert result.exit_code == 0
@@ -592,7 +592,7 @@ class TestContextCommand:
     def test_context_silent_format(self, runner, mock_engine):
         """Test context with silent format (for hooks)."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+            with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
                 with patch.dict(os.environ, {"HOME": tmpdir}):
                     result = runner.invoke(cli, ["context", "--format", "silent"])
 
@@ -604,7 +604,7 @@ class TestContextCommand:
         formats = ["brief", "detailed", "structured", "markdown"]
 
         for fmt in formats:
-            with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+            with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
                 result = runner.invoke(cli, ["context", "--format", fmt])
                 assert result.exit_code == 0, f"Failed for format: {fmt}"
 
@@ -754,17 +754,17 @@ class TestStatsCommand:
 
     def test_stats_basic(self, runner, mock_engine):
         """Test basic stats."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["stats"])
 
         assert result.exit_code == 0
-        assert "Memory Layer Statistics" in result.output
+        assert "Runtime Memory Statistics" in result.output
         assert "Total memories:" in result.output
         assert "By Category:" in result.output
 
     def test_stats_with_project(self, runner, mock_engine):
         """Test stats with project filter."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["stats", "-p", "myproject"])
 
         assert result.exit_code == 0
@@ -773,7 +773,7 @@ class TestStatsCommand:
 
     def test_stats_json_output(self, runner, mock_engine):
         """Test stats with JSON output."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["--json-output", "stats"])
 
         assert result.exit_code == 0
@@ -802,7 +802,7 @@ class TestServeCommand:
     def test_serve_mcp(self, runner):
         """Test serve with MCP option."""
         # Mock the run_mcp_server since it uses stdio which doesn't work with CliRunner
-        with patch("memory_layer.cli.main.asyncio.run") as mock_run:
+        with patch("runtime_memory.cli.main.asyncio.run") as mock_run:
             result = runner.invoke(cli, ["serve", "--mcp"])
 
         assert result.exit_code == 0
@@ -811,10 +811,10 @@ class TestServeCommand:
 
     def test_serve_rest(self, runner, mock_engine):
         """Test serve with REST option."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             # Patch at the server package level since CLI does:
-            # from memory_layer.server import run_server
-            with patch("memory_layer.server.run_server") as mock_run:
+            # from runtime_memory.server import run_server
+            with patch("runtime_memory.server.run_server") as mock_run:
                 result = runner.invoke(cli, ["serve", "--rest"])
 
         assert result.exit_code == 0
@@ -823,8 +823,8 @@ class TestServeCommand:
 
     def test_serve_rest_with_port(self, runner, mock_engine):
         """Test serve with custom port."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
-            with patch("memory_layer.server.run_server") as mock_run:
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
+            with patch("runtime_memory.server.run_server") as mock_run:
                 result = runner.invoke(cli, ["serve", "--rest", "--port", "9000"])
 
         assert result.exit_code == 0
@@ -835,8 +835,8 @@ class TestServeCommand:
 
     def test_serve_rest_with_host(self, runner, mock_engine):
         """Test serve with custom host."""
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
-            with patch("memory_layer.server.run_server") as mock_run:
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
+            with patch("runtime_memory.server.run_server") as mock_run:
                 result = runner.invoke(cli, ["serve", "--rest", "--host", "0.0.0.0"])
 
         assert result.exit_code == 0
@@ -893,7 +893,7 @@ class TestExportCommand:
         """Test JSON export."""
         output_file = tmp_path / "export.json"
 
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["export", str(output_file), "--format", "json"])
 
         assert result.exit_code == 0
@@ -908,7 +908,7 @@ class TestExportCommand:
         """Test markdown export."""
         output_file = tmp_path / "export.md"
 
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["export", str(output_file), "--format", "md"])
 
         assert result.exit_code == 0
@@ -919,7 +919,7 @@ class TestExportCommand:
         """Test export with project filter."""
         output_file = tmp_path / "export.json"
 
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, [
                 "export", str(output_file), "-p", "myproject"
             ])
@@ -941,7 +941,7 @@ class TestErrorHandling:
         """Test add command with engine error."""
         mock_engine.add = AsyncMock(side_effect=Exception("Database error"))
 
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["add", "Test content", "-c", "general"])
 
         assert result.exit_code != 0
@@ -951,7 +951,7 @@ class TestErrorHandling:
         """Test search command with engine error."""
         mock_engine.search = AsyncMock(side_effect=Exception("Search failed"))
 
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["search", "test"])
 
         assert result.exit_code != 0
@@ -960,7 +960,7 @@ class TestErrorHandling:
         """Test stats command with engine error."""
         mock_engine.stats = AsyncMock(side_effect=Exception("Stats failed"))
 
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
             result = runner.invoke(cli, ["stats"])
 
         assert result.exit_code != 0
@@ -973,11 +973,11 @@ class TestCheckCommand:
         """A base install must be told why search is keyword-only, and how to change it."""
         mock_engine.embedding_provider.available = False
 
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
-            result = runner.invoke(cli, ["check"], env={"MEMORY_LAYER_DB": str(tmp_path / "m.db")})
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
+            result = runner.invoke(cli, ["check"], env={"RUNTIME_MEMORY_DB": str(tmp_path / "m.db")})
 
         assert "keyword matching only" in result.output
-        assert "memory-layer-ai[embedding]" in result.output
+        assert "runtime-memory[embedding]" in result.output
         # Absent is a supported way to run, so it must not be counted as an issue.
         assert "[ISSUE]" not in result.output
 
@@ -985,8 +985,8 @@ class TestCheckCommand:
         mock_engine.embedding_provider.available = True
         mock_engine.embedding_provider.model_name = "all-MiniLM-L6-v2"
 
-        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
-            result = runner.invoke(cli, ["check"], env={"MEMORY_LAYER_DB": str(tmp_path / "m.db")})
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
+            result = runner.invoke(cli, ["check"], env={"RUNTIME_MEMORY_DB": str(tmp_path / "m.db")})
 
         assert "[OK] Embedding backend: all-MiniLM-L6-v2" in result.output
 
@@ -994,34 +994,34 @@ class TestCheckCommand:
 class TestResolveDbPath:
     """The CLI must honour both documented database env vars.
 
-    MEMORY_LAYER_DB_PATH was documented for a while but wired to nothing, which
+    RUNTIME_MEMORY_DB_PATH was documented for a while but wired to nothing, which
     silently sent test runs at the user's real database.
     """
 
     def test_defaults_to_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from memory_layer.cli.main import DEFAULT_DB_PATH, resolve_db_path
+        from runtime_memory.cli.main import DEFAULT_DB_PATH, resolve_db_path
 
-        monkeypatch.delenv("MEMORY_LAYER_DB", raising=False)
-        monkeypatch.delenv("MEMORY_LAYER_DATABASE__PATH", raising=False)
+        monkeypatch.delenv("RUNTIME_MEMORY_DB", raising=False)
+        monkeypatch.delenv("RUNTIME_MEMORY_DATABASE__PATH", raising=False)
         assert resolve_db_path() == str(DEFAULT_DB_PATH)
 
     def test_honours_short_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from memory_layer.cli.main import resolve_db_path
+        from runtime_memory.cli.main import resolve_db_path
 
-        monkeypatch.delenv("MEMORY_LAYER_DATABASE__PATH", raising=False)
-        monkeypatch.setenv("MEMORY_LAYER_DB", "/tmp/short.db")
+        monkeypatch.delenv("RUNTIME_MEMORY_DATABASE__PATH", raising=False)
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", "/tmp/short.db")
         assert resolve_db_path() == "/tmp/short.db"
 
     def test_honours_settings_style_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from memory_layer.cli.main import resolve_db_path
+        from runtime_memory.cli.main import resolve_db_path
 
-        monkeypatch.delenv("MEMORY_LAYER_DB", raising=False)
-        monkeypatch.setenv("MEMORY_LAYER_DATABASE__PATH", "/tmp/nested.db")
+        monkeypatch.delenv("RUNTIME_MEMORY_DB", raising=False)
+        monkeypatch.setenv("RUNTIME_MEMORY_DATABASE__PATH", "/tmp/nested.db")
         assert resolve_db_path() == "/tmp/nested.db"
 
     def test_short_name_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from memory_layer.cli.main import resolve_db_path
+        from runtime_memory.cli.main import resolve_db_path
 
-        monkeypatch.setenv("MEMORY_LAYER_DB", "/tmp/short.db")
-        monkeypatch.setenv("MEMORY_LAYER_DATABASE__PATH", "/tmp/nested.db")
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", "/tmp/short.db")
+        monkeypatch.setenv("RUNTIME_MEMORY_DATABASE__PATH", "/tmp/nested.db")
         assert resolve_db_path() == "/tmp/short.db"

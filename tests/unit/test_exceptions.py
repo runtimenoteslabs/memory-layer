@@ -2,7 +2,7 @@
 
 import pytest
 
-from memory_layer.core.exceptions import (
+from runtime_memory.core.exceptions import (
     AuthenticationError,
     BeadsNotFoundError,
     ConfigurationError,
@@ -19,7 +19,7 @@ from memory_layer.core.exceptions import (
     InvalidResponseError,
     LLMAPIError,
     MCPError,
-    MemoryLayerError,
+    RuntimeMemoryError,
     MemoryNotFoundError,
     ModelNotFoundError,
     RateLimitError,
@@ -38,11 +38,11 @@ from memory_layer.core.exceptions import (
 
 
 class TestMemoryLayerError:
-    """Tests for base MemoryLayerError."""
+    """Tests for base RuntimeMemoryError."""
 
     def test_basic_creation(self):
         """Test basic error creation."""
-        error = MemoryLayerError("Something went wrong")
+        error = RuntimeMemoryError("Something went wrong")
         assert str(error) == "Something went wrong"
         assert error.message == "Something went wrong"
         assert error.code == ErrorCode.UNKNOWN
@@ -51,7 +51,7 @@ class TestMemoryLayerError:
 
     def test_with_code_and_details(self):
         """Test error with code and details."""
-        error = MemoryLayerError(
+        error = RuntimeMemoryError(
             "Database error",
             code=ErrorCode.STORAGE_ERROR,
             details={"table": "memories"},
@@ -63,7 +63,7 @@ class TestMemoryLayerError:
 
     def test_to_dict(self):
         """Test conversion to dictionary."""
-        error = MemoryLayerError(
+        error = RuntimeMemoryError(
             "Test error",
             code=ErrorCode.VALIDATION_ERROR,
             details={"field": "content"},
@@ -79,7 +79,7 @@ class TestMemoryLayerError:
 
     def test_user_message(self):
         """Test user-friendly message."""
-        error = MemoryLayerError("Technical error details")
+        error = RuntimeMemoryError("Technical error details")
         assert error.user_message() == "Technical error details"
 
 
@@ -90,7 +90,7 @@ class TestStorageExceptions:
         """Test base storage error."""
         error = StorageError("Database failure")
         assert error.code == ErrorCode.STORAGE_ERROR
-        assert isinstance(error, MemoryLayerError)
+        assert isinstance(error, RuntimeMemoryError)
 
     def test_memory_not_found(self):
         """Test MemoryNotFoundError."""
@@ -120,7 +120,7 @@ class TestRetrievalExceptions:
         """Test base retrieval error."""
         error = RetrievalError("Search failed")
         assert error.code == ErrorCode.RETRIEVAL_ERROR
-        assert isinstance(error, MemoryLayerError)
+        assert isinstance(error, RuntimeMemoryError)
 
     def test_embedding_error(self):
         """Test EmbeddingError."""
@@ -151,7 +151,7 @@ class TestExtractionExceptions:
         """Test base extraction error."""
         error = ExtractionError("Extraction failed")
         assert error.code == ErrorCode.EXTRACTION_ERROR
-        assert isinstance(error, MemoryLayerError)
+        assert isinstance(error, RuntimeMemoryError)
 
     def test_llm_api_error(self):
         """Test LLMAPIError."""
@@ -181,7 +181,7 @@ class TestServerExceptions:
         """Test base server error."""
         error = ServerError("Server crashed")
         assert error.code == ErrorCode.SERVER_ERROR
-        assert isinstance(error, MemoryLayerError)
+        assert isinstance(error, RuntimeMemoryError)
 
     def test_mcp_error(self):
         """Test MCPError."""
@@ -221,7 +221,7 @@ class TestSDKExceptions:
         """Test base SDK error."""
         error = SDKError("Client error")
         assert error.code == ErrorCode.SDK_ERROR
-        assert isinstance(error, MemoryLayerError)
+        assert isinstance(error, RuntimeMemoryError)
 
     def test_authentication_error(self):
         """Test AuthenticationError."""
@@ -244,7 +244,7 @@ class TestTaskExceptions:
         """Test base task error."""
         error = TaskError("Task failed")
         assert error.code == ErrorCode.TASK_ERROR
-        assert isinstance(error, MemoryLayerError)
+        assert isinstance(error, RuntimeMemoryError)
 
     def test_beads_not_found(self):
         """Test BeadsNotFoundError."""
@@ -292,8 +292,8 @@ class TestConfigurationExceptions:
 class TestErrorFormatting:
     """Tests for error formatting utilities."""
 
-    def test_format_memory_layer_error(self):
-        """Test formatting MemoryLayerError."""
+    def test_format_runtime_memory_error(self):
+        """Test formatting RuntimeMemoryError."""
         error = MemoryNotFoundError("mem-123")
         result = format_error(error)
         assert "mem-123" in result
@@ -326,13 +326,13 @@ class TestErrorFormatting:
 class TestRecoverableCheck:
     """Tests for is_recoverable utility."""
 
-    def test_recoverable_memory_layer_error(self):
-        """Test recoverable MemoryLayerError."""
+    def test_recoverable_runtime_memory_error(self):
+        """Test recoverable RuntimeMemoryError."""
         error = DatabaseConnectionError()
         assert is_recoverable(error) is True
 
-    def test_non_recoverable_memory_layer_error(self):
-        """Test non-recoverable MemoryLayerError."""
+    def test_non_recoverable_runtime_memory_error(self):
+        """Test non-recoverable RuntimeMemoryError."""
         error = MemoryNotFoundError("mem-123")
         assert is_recoverable(error) is False
 

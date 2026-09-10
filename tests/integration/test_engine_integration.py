@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from memory_layer.core.embeddings import MockEmbeddingProvider
-from memory_layer.core.engine import EngineConfig, MemoryEngine
-from memory_layer.core.models import (
+from runtime_memory.core.embeddings import MockEmbeddingProvider
+from runtime_memory.core.engine import EngineConfig, MemoryEngine
+from runtime_memory.core.models import (
     Memory,
     MemoryCategory,
     MemoryScope,

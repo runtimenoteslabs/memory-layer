@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memory_layer.tasks import (
+from runtime_memory.tasks import (
     BeadsAdapter,
     BeadsParser,
     BeadsSyncResult,
