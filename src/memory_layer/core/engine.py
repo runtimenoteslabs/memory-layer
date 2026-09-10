@@ -64,7 +64,7 @@ class EngineConfig:
 
     # Embedding settings
     embedding_provider: str = "local"
-    """Embedding provider type: 'local', 'openai', 'voyage', 'mock'."""
+    """Embedding provider type: 'local', 'openai', 'voyage', 'mock', 'null'."""
 
     embedding_config: EmbeddingConfig | None = None
     """Optional embedding provider configuration."""
@@ -897,19 +897,32 @@ class MemoryEngine:
         status["storage"] = await self._storage.health_check()
 
         # Check embedding provider
-        try:
-            # Quick embedding test
-            test_result = await self._embedding_provider.embed("test")
+        if not self._embedding_provider.available:
+            # Not an error: retrieval still works on keyword matching alone.
             status["embedding_provider"] = {
-                "status": "healthy",
+                "status": "unavailable",
                 "model": self._embedding_provider.model_name,
-                "dimensions": test_result.dimensions,
+                "dimensions": 0,
+                "detail": (
+                    "No embedding backend installed, so semantic search is off "
+                    "and retrieval uses keyword matching only. Enable it with: "
+                    "pip install 'memory-layer-ai[embedding]'"
+                ),
             }
-        except Exception as e:
-            status["embedding_provider"] = {
-                "status": "unhealthy",
-                "error": str(e),
-            }
+        else:
+            try:
+                # Quick embedding test
+                test_result = await self._embedding_provider.embed("test")
+                status["embedding_provider"] = {
+                    "status": "healthy",
+                    "model": self._embedding_provider.model_name,
+                    "dimensions": test_result.dimensions,
+                }
+            except Exception as e:
+                status["embedding_provider"] = {
+                    "status": "unhealthy",
+                    "error": str(e),
+                }
 
         # Check retriever
         status["retriever"] = {

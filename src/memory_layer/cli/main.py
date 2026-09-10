@@ -31,14 +31,29 @@ from memory_layer.core.models import MemoryCategory, MemoryScope, MemorySource, 
 logger = get_logger(__name__)
 
 
+DEFAULT_DB_PATH = Path.home() / ".memory-layer" / "memories.db"
+
+
+def resolve_db_path() -> str:
+    """Resolve the database path from the environment.
+
+    Accepts either MEMORY_LAYER_DB or the settings-style
+    MEMORY_LAYER_DATABASE__PATH, in that order, before falling back to the
+    default location. Both names are honoured so that isolating the database
+    for a test run works regardless of which one the caller picked up from the
+    docs.
+    """
+    return os.environ.get(
+        "MEMORY_LAYER_DB",
+        os.environ.get("MEMORY_LAYER_DATABASE__PATH", str(DEFAULT_DB_PATH)),
+    )
+
+
 def get_engine():
     """Get or create an initialized MemoryEngine instance."""
     from memory_layer.core.engine import EngineConfig, MemoryEngine
 
-    db_path = os.environ.get(
-        "MEMORY_LAYER_DB",
-        str(Path.home() / ".memory-layer" / "memories.db")
-    )
+    db_path = resolve_db_path()
     # Ensure directory exists
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     config = EngineConfig(db_path=db_path)
@@ -755,10 +770,7 @@ def check_health(ctx: click.Context, fix: bool) -> None:
     click.echo("=" * 40)
 
     # Check 1: Database location and access
-    db_path = os.environ.get(
-        "MEMORY_LAYER_DB",
-        str(Path.home() / ".memory-layer" / "memories.db")
-    )
+    db_path = resolve_db_path()
     db_exists = Path(db_path).exists()
     db_dir_exists = Path(db_path).parent.exists()
 

@@ -964,3 +964,39 @@ class TestErrorHandling:
             result = runner.invoke(cli, ["stats"])
 
         assert result.exit_code != 0
+
+
+class TestResolveDbPath:
+    """The CLI must honour both documented database env vars.
+
+    MEMORY_LAYER_DB_PATH was documented for a while but wired to nothing, which
+    silently sent test runs at the user's real database.
+    """
+
+    def test_defaults_to_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from memory_layer.cli.main import DEFAULT_DB_PATH, resolve_db_path
+
+        monkeypatch.delenv("MEMORY_LAYER_DB", raising=False)
+        monkeypatch.delenv("MEMORY_LAYER_DATABASE__PATH", raising=False)
+        assert resolve_db_path() == str(DEFAULT_DB_PATH)
+
+    def test_honours_short_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from memory_layer.cli.main import resolve_db_path
+
+        monkeypatch.delenv("MEMORY_LAYER_DATABASE__PATH", raising=False)
+        monkeypatch.setenv("MEMORY_LAYER_DB", "/tmp/short.db")
+        assert resolve_db_path() == "/tmp/short.db"
+
+    def test_honours_settings_style_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from memory_layer.cli.main import resolve_db_path
+
+        monkeypatch.delenv("MEMORY_LAYER_DB", raising=False)
+        monkeypatch.setenv("MEMORY_LAYER_DATABASE__PATH", "/tmp/nested.db")
+        assert resolve_db_path() == "/tmp/nested.db"
+
+    def test_short_name_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from memory_layer.cli.main import resolve_db_path
+
+        monkeypatch.setenv("MEMORY_LAYER_DB", "/tmp/short.db")
+        monkeypatch.setenv("MEMORY_LAYER_DATABASE__PATH", "/tmp/nested.db")
+        assert resolve_db_path() == "/tmp/short.db"

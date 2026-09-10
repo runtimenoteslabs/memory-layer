@@ -48,6 +48,7 @@ from memory_layer.core.embeddings import (
     EmbeddingResult,
     LocalEmbeddingProvider,
     MockEmbeddingProvider,
+    NullEmbeddingProvider,
     ModelNotFoundError,
     get_embedding_provider,
 )
@@ -146,6 +147,7 @@ __all__ = [
     "LocalEmbeddingProvider",
     "APIEmbeddingProvider",
     "MockEmbeddingProvider",
+    "NullEmbeddingProvider",
     "EmbeddingConfig",
     "EmbeddingResult",
     "BatchEmbeddingResult",

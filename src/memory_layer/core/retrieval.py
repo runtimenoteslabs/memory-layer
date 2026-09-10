@@ -511,25 +511,26 @@ class HybridRetriever:
         # Normalize BM25 score using sigmoid-like function
         normalized_bm25 = bm25_score / (bm25_score + 1.0) if bm25_score > 0 else 0.0
 
+        # Without both a query vector and a stored vector there is nothing to
+        # compare, so score on keyword matching alone. This is the path taken
+        # when no embedding backend is installed, and also when a memory
+        # predates the current provider.
+        if not query_embedding or memory.id not in self._embeddings:
+            return normalized_bm25
+
         # Vector similarity score
-        vector_score = 0.0
-        if memory.id in self._embeddings:
-            memory_embedding = self._embeddings[memory.id]
-            similarity = self.embedding_provider.cosine_similarity(
-                query_embedding, memory_embedding
-            )
-            # Convert from [-1, 1] to [0, 1] and apply threshold
-            vector_score = max(0, (similarity + 1) / 2)
-            if similarity < self.config.min_vector_similarity:
-                vector_score *= 0.5  # Penalize low similarity
+        memory_embedding = self._embeddings[memory.id]
+        similarity = self.embedding_provider.cosine_similarity(
+            query_embedding, memory_embedding
+        )
+        # Convert from [-1, 1] to [0, 1] and apply threshold
+        vector_score = max(0, (similarity + 1) / 2)
+        if similarity < self.config.min_vector_similarity:
+            vector_score *= 0.5  # Penalize low similarity
 
         # Combine BM25 and vector scores
         vector_weight = self.config.vector_weight
         bm25_weight = 1.0 - vector_weight
-
-        # If no embedding available, use only BM25
-        if memory.id not in self._embeddings:
-            return normalized_bm25
 
         return bm25_weight * normalized_bm25 + vector_weight * vector_score
 

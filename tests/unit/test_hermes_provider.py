@@ -10,7 +10,9 @@ Tests for:
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import sys
 import tomllib
 from pathlib import Path
 
@@ -20,7 +22,7 @@ from memory_layer.core.models import Outcome
 from memory_layer.hermes import MemoryLayerProvider, register
 from memory_layer.hermes._base import RecallStatus, is_trivial_prompt
 from memory_layer.hermes.bridge import DEFAULT_TIMEOUT, run_sync, spawn
-from memory_layer.hermes.provider import PROVIDER_NAME
+from memory_layer.hermes.provider import PROVIDER_NAME, _embedding_provider_name
 from memory_layer.hermes.trace import TRACE_ENV_VAR, TraceWriter
 
 
@@ -35,6 +37,23 @@ def provider(tmp_path, monkeypatch):
     instance.initialize("session-1", agent_context="primary")
     yield instance
     instance.shutdown()
+
+
+def _hide_sentence_transformers(monkeypatch):
+    """Make the embedding extra look uninstalled, as a base install would.
+
+    Blocks both routes to it: the import statement and the spec lookup the
+    engine factory uses.
+    """
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *args, **kwargs: (
+            None if name == "sentence_transformers" else real_find_spec(name, *args, **kwargs)
+        ),
+    )
 
 
 def _call(instance, tool, **args):
@@ -183,6 +202,52 @@ class TestLifecycle:
 
         assert provider._session_id == "session-2"
         assert provider._last_ids == []
+
+
+# =============================================================================
+# Embedding Backend Tests
+# =============================================================================
+
+
+class TestEmbeddingBackend:
+    """The store is shared, so a missing model must not turn into fake vectors."""
+
+    def test_defaults_to_local_even_without_the_model(self, monkeypatch):
+        """The engine factory decides what `local` resolves to, not the provider."""
+        monkeypatch.delenv("MEMORY_LAYER_EMBEDDING", raising=False)
+        _hide_sentence_transformers(monkeypatch)
+
+        assert _embedding_provider_name() == "local"
+
+    def test_override_is_passed_through(self, monkeypatch):
+        """An explicit choice wins."""
+        monkeypatch.setenv("MEMORY_LAYER_EMBEDDING", "voyage")
+
+        assert _embedding_provider_name() == "voyage"
+
+    def test_missing_model_writes_no_vector(self, tmp_path, monkeypatch):
+        """Recall still works, and nothing meaningless lands in the index."""
+        monkeypatch.setenv("MEMORY_LAYER_DB", str(tmp_path / "memories.db"))
+        monkeypatch.delenv("MEMORY_LAYER_EMBEDDING", raising=False)
+        _hide_sentence_transformers(monkeypatch)
+
+        instance = MemoryLayerProvider()
+        instance.initialize("session-null", agent_context="primary")
+        try:
+            assert instance._engine.embedding_provider.available is False
+
+            _call(
+                instance,
+                "memorylayer_remember",
+                content="Run pytest from the repo root",
+                category="gotcha",
+            )
+            block = instance.prefetch("how do I run the tests?")
+
+            assert "Run pytest from the repo root" in block
+            assert instance._engine.retriever.indexed_with_embeddings == 0
+        finally:
+            instance.shutdown()
 
 
 # =============================================================================

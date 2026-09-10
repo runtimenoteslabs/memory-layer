@@ -77,27 +77,16 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _detect_embedding_provider() -> str:
-    """Pick an embedding backend that will actually load.
+def _embedding_provider_name() -> str:
+    """Name the embedding backend for the engine to build.
 
-    The base install is deliberately light, so ``sentence-transformers`` may be
-    absent. Semantic scoring is skipped in that case and retrieval falls back to
-    the BM25 half of the hybrid, which still works. Choosing here rather than
-    failing at first embed keeps a lightweight install usable.
+    ``local`` is the right answer even when ``sentence-transformers`` is
+    missing: the engine factory degrades it to the null provider, which indexes
+    no vectors and leaves retrieval on the BM25 half of the hybrid. Repeating
+    that check here would give the store two answers to the same question, and
+    picking ``mock`` writes hash-derived vectors alongside real ones.
     """
-    override = os.environ.get("MEMORY_LAYER_EMBEDDING")
-    if override:
-        return override
-
-    try:
-        import sentence_transformers  # noqa: F401, PLC0415
-    except ImportError:
-        logger.info(
-            "sentence-transformers not installed; using keyword retrieval. "
-            "Install memory-layer[embedding] for semantic search."
-        )
-        return "mock"
-    return "local"
+    return os.environ.get("MEMORY_LAYER_EMBEDDING") or "local"
 
 
 class MemoryLayerProvider(MemoryProvider):
@@ -177,7 +166,7 @@ class MemoryLayerProvider(MemoryProvider):
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         config = EngineConfig(
             db_path=str(self._db_path),
-            embedding_provider=_detect_embedding_provider(),
+            embedding_provider=_embedding_provider_name(),
             track_last_search=True,
         )
 

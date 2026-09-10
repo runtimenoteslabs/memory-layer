@@ -240,10 +240,15 @@ class Settings(BaseSettings):
     2. .env file in current directory
     3. Default values (lowest priority)
 
-    Environment variables use MEMORY_LAYER_ prefix:
+    Environment variables use MEMORY_LAYER_ prefix. Nested settings use a
+    double-underscore delimiter:
     - MEMORY_LAYER_ENV=production
-    - MEMORY_LAYER_DB_PATH=/path/to/db
+    - MEMORY_LAYER_DATABASE__PATH=/path/to/db
     - MEMORY_LAYER_LOG_LEVEL=DEBUG
+
+    The ``mem`` CLI accepts either MEMORY_LAYER_DATABASE__PATH or the shorter
+    MEMORY_LAYER_DB. Note that MEMORY_LAYER_DB_PATH is *not* recognised; it was
+    documented here in error and silently fell through to the default database.
     """
 
     model_config = SettingsConfigDict(

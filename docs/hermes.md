@@ -39,7 +39,7 @@ add the embedding extra:
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python -m pip install \
-    'memory-layer[embedding] @ git+https://github.com/runtimenoteslabs/memory-layer.git'
+    'memory-layer-ai[embedding] @ git+https://github.com/runtimenoteslabs/memory-layer.git'
 ```
 
 Without the extra, retrieval uses only the BM25 half of the hybrid. With it, the
@@ -57,7 +57,7 @@ beyond the provider name.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MEMORY_LAYER_DB` | `~/.memory-layer/memories.db` | The shared store |
-| `MEMORY_LAYER_EMBEDDING` | auto | `local`, `mock`, `openai`, `voyage` |
+| `MEMORY_LAYER_EMBEDDING` | `local` | `local`, `null`, `mock`, `openai`, `voyage` |
 | `MEMORY_LAYER_RECALL_LIMIT` | `8` | Memories injected per turn |
 | `MEMORY_LAYER_MIN_SCORE` | `0.0` | Relevance floor for injection |
 | `MEMORY_LAYER_PROJECT` | workspace name | Project scope for memories |
@@ -65,8 +65,10 @@ beyond the provider name.
 | `MEMORY_LAYER_EXTRACT_ON_END` | `false` | Extract memories at session end |
 | `MEMORY_LAYER_HERMES_TRACE` | unset | Path for the evaluation trace |
 
-`MEMORY_LAYER_EMBEDDING` defaults to `local` when `sentence-transformers` is
-importable, and to `mock` otherwise.
+`local` degrades on its own: without `sentence-transformers` it indexes no
+vectors and retrieval scores on keywords alone. Set `null` to force that even
+when the model is installed. Avoid `mock` against a shared store, since its
+hash-derived vectors are meaningless next to real ones.
 
 The store sits outside `HERMES_HOME` so that Claude Code and MCP clients can
 share it. The provider reports its path through `backup_paths()`, so

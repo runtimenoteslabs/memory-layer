@@ -23,6 +23,7 @@ from memory_layer.core.embeddings import (
     LocalEmbeddingProvider,
     MockEmbeddingProvider,
     ModelNotFoundError,
+    NullEmbeddingProvider,
     get_embedding_provider,
 )
 
@@ -706,3 +707,60 @@ class TestEdgeCases:
         # They're different strings so embeddings should differ
         # (normalization would make them same, but we don't normalize)
         assert len(result1.embedding) == len(result2.embedding)
+
+
+class TestNullEmbeddingProvider:
+    """Tests for the keyword-only fallback provider."""
+
+    def test_reports_unavailable(self) -> None:
+        provider = NullEmbeddingProvider()
+        assert provider.available is False
+        assert provider.dimensions == 0
+
+    def test_other_providers_report_available(self) -> None:
+        assert MockEmbeddingProvider().available is True
+
+    @pytest.mark.asyncio
+    async def test_embed_returns_empty_vector(self) -> None:
+        result = await NullEmbeddingProvider().embed("anything")
+        assert result.embedding == []
+        assert result.dimensions == 0
+
+    @pytest.mark.asyncio
+    async def test_embed_many_returns_one_empty_per_text(self) -> None:
+        result = await NullEmbeddingProvider().embed_many(["a", "b", "c"])
+        assert [list(e) for e in result.embeddings] == [[], [], []]
+
+
+class TestLocalProviderFallback:
+    """The factory must degrade instead of handing back a provider that raises."""
+
+    def test_falls_back_when_sentence_transformers_missing(self) -> None:
+        with patch("importlib.util.find_spec", return_value=None):
+            provider = get_embedding_provider("local")
+        assert isinstance(provider, NullEmbeddingProvider)
+        assert provider.available is False
+
+    def test_uses_local_provider_when_available(self) -> None:
+        with patch("importlib.util.find_spec", return_value=MagicMock()):
+            provider = get_embedding_provider("local")
+        assert isinstance(provider, LocalEmbeddingProvider)
+
+    def test_null_can_be_requested_by_name(self) -> None:
+        # Lets a caller turn semantic search off even where the model is present,
+        # which is the stopgap for a store holding vectors from another model.
+        assert isinstance(get_embedding_provider("null"), NullEmbeddingProvider)
+
+    def test_fallback_names_the_correct_distribution(self) -> None:
+        # Asserted on the logger directly rather than via caplog: other tests
+        # reconfigure logging, which leaves caplog order-dependent here.
+        with (
+            patch("memory_layer.core.embeddings.logger") as mock_logger,
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            get_embedding_provider("local")
+
+        mock_logger.warning.assert_called_once()
+        message = mock_logger.warning.call_args.args[0]
+        assert "memory-layer-ai[embedding]" in message
+        assert "memory-layer[embedding]" not in message

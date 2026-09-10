@@ -11,6 +11,7 @@ Provides vector embeddings with:
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import time
@@ -299,6 +300,16 @@ class EmbeddingProvider(ABC):
             )
 
     @property
+    def available(self) -> bool:
+        """Whether this provider can actually produce embeddings.
+
+        Providers that need an optional dependency report False when it is
+        missing, which lets retrieval fall back to keyword matching instead of
+        raising.
+        """
+        return True
+
+    @property
     @abstractmethod
     def model_name(self) -> str:
         """Get the model name."""
@@ -536,7 +547,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         except ImportError as e:
             raise ModelNotFoundError(
                 "sentence-transformers not installed. "
-                "Install with: pip install 'memory-layer[phase1]'"
+                "Install with: pip install 'memory-layer-ai[phase1]'"
             ) from e
 
         try:
@@ -810,6 +821,53 @@ class MockEmbeddingProvider(EmbeddingProvider):
         return embeddings
 
 
+class NullEmbeddingProvider(EmbeddingProvider):
+    """Fallback provider used when no embedding backend is installed.
+
+    Returns an empty embedding for every text. Nothing is written to the vector
+    index, so retrieval scores memories with BM25 keyword matching alone, which
+    needs no third-party packages. This keeps a core ``pip install
+    memory-layer-ai`` usable; install the ``embedding`` extra to turn semantic
+    search back on.
+    """
+
+    def __init__(self, config: EmbeddingConfig | None = None) -> None:
+        """Initialize the null provider.
+
+        Args:
+            config: Configuration for the provider.
+        """
+        if config is None:
+            config = EmbeddingConfig(cache_enabled=False)
+        super().__init__(config)
+
+    @property
+    def available(self) -> bool:
+        """Null provider never produces usable embeddings."""
+        return False
+
+    @property
+    def model_name(self) -> str:
+        """Get the model name."""
+        return "null-embedding-provider"
+
+    @property
+    def dimensions(self) -> int:
+        """Get the embedding dimensions."""
+        return 0
+
+    async def _embed_texts(self, texts: list[str]) -> list[Embedding]:
+        """Return an empty embedding per text.
+
+        Args:
+            texts: Texts to embed.
+
+        Returns:
+            One empty embedding for each input text.
+        """
+        return [[] for _ in texts]
+
+
 def get_embedding_provider(
     provider_type: str = "local",
     config: EmbeddingConfig | None = None,
@@ -818,7 +876,8 @@ def get_embedding_provider(
     """Factory function to create embedding providers.
 
     Args:
-        provider_type: Type of provider ("local", "openai", "voyage", "mock").
+        provider_type: Type of provider ("local", "openai", "voyage", "mock",
+            "null").
         config: Configuration for the provider.
         **kwargs: Additional arguments passed to the provider.
 
@@ -826,6 +885,13 @@ def get_embedding_provider(
         Embedding provider instance.
     """
     if provider_type == "local":
+        if importlib.util.find_spec("sentence_transformers") is None:
+            logger.warning(
+                "sentence-transformers is not installed, so semantic search is "
+                "disabled and retrieval will use keyword matching only. "
+                "Install with: pip install 'memory-layer-ai[embedding]'"
+            )
+            return NullEmbeddingProvider(config)
         return LocalEmbeddingProvider(config)
     elif provider_type == "openai":
         return APIEmbeddingProvider(config, api_provider="openai")
@@ -833,5 +899,7 @@ def get_embedding_provider(
         return APIEmbeddingProvider(config, api_provider="voyage")
     elif provider_type == "mock":
         return MockEmbeddingProvider(config, **kwargs)
+    elif provider_type == "null":
+        return NullEmbeddingProvider(config)
     else:
         raise ValueError(f"Unknown provider type: {provider_type}")

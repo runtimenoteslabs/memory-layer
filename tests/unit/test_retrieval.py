@@ -691,3 +691,38 @@ class TestPerformance:
         # Should complete in under 1 second (generous for test environment)
         assert elapsed < 1.0
         assert len(results) > 0
+
+
+class TestSemanticScoreWithoutVectors:
+    """Retrieval must fall back to BM25 when either vector is missing."""
+
+    def test_empty_query_embedding_uses_bm25_only(
+        self, retriever: HybridRetriever
+    ) -> None:
+        memory = create_memory("clear the pytest cache when tests fail")
+        retriever.add_memory(memory, [0.1] * 384)
+
+        # An empty query vector is what NullEmbeddingProvider returns.
+        score = retriever._calculate_semantic_score(memory, "pytest cache", [])
+        expected = retriever._bm25.score_document(memory.id, "pytest cache")
+        assert score == pytest.approx(expected / (expected + 1.0))
+
+    def test_unembedded_memory_uses_bm25_only(self, retriever: HybridRetriever) -> None:
+        memory = create_memory("use snake_case for python identifiers")
+        retriever.add_memory(memory)  # no embedding stored
+
+        score = retriever._calculate_semantic_score(memory, "snake_case", [0.1] * 384)
+        expected = retriever._bm25.score_document(memory.id, "snake_case")
+        assert score == pytest.approx(expected / (expected + 1.0))
+
+    def test_bm25_still_discriminates_without_vectors(
+        self, retriever: HybridRetriever
+    ) -> None:
+        hit = create_memory("clear the pytest cache when tests fail randomly")
+        miss = create_memory("use snake_case for python identifiers")
+        for m in (hit, miss):
+            retriever.add_memory(m)
+
+        hit_score = retriever._calculate_semantic_score(hit, "pytest cache", [])
+        miss_score = retriever._calculate_semantic_score(miss, "pytest cache", [])
+        assert hit_score > miss_score

@@ -497,7 +497,7 @@ class MemoryExtractor:
             except ImportError as e:
                 raise ImportError(
                     "anthropic package required for extraction. "
-                    "Install with: pip install 'memory-layer[phase1]'"
+                    "Install with: pip install 'memory-layer-ai[phase1]'"
                 ) from e
 
             self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
