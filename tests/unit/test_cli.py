@@ -966,6 +966,31 @@ class TestErrorHandling:
         assert result.exit_code != 0
 
 
+class TestCheckCommand:
+    """`mem check` is where a user goes to find out how their install is set up."""
+
+    def test_reports_a_missing_embedding_backend(self, runner, mock_engine, tmp_path):
+        """A base install must be told why search is keyword-only, and how to change it."""
+        mock_engine.embedding_provider.available = False
+
+        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+            result = runner.invoke(cli, ["check"], env={"MEMORY_LAYER_DB": str(tmp_path / "m.db")})
+
+        assert "keyword matching only" in result.output
+        assert "memory-layer-ai[embedding]" in result.output
+        # Absent is a supported way to run, so it must not be counted as an issue.
+        assert "[ISSUE]" not in result.output
+
+    def test_names_the_model_when_present(self, runner, mock_engine, tmp_path):
+        mock_engine.embedding_provider.available = True
+        mock_engine.embedding_provider.model_name = "all-MiniLM-L6-v2"
+
+        with patch("memory_layer.cli.main.get_engine", return_value=mock_engine):
+            result = runner.invoke(cli, ["check"], env={"MEMORY_LAYER_DB": str(tmp_path / "m.db")})
+
+        assert "[OK] Embedding backend: all-MiniLM-L6-v2" in result.output
+
+
 class TestResolveDbPath:
     """The CLI must honour both documented database env vars.
 

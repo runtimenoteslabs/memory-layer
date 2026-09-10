@@ -126,12 +126,20 @@ def setup_logging(
 def get_logger(name: str) -> logging.Logger:
     """Get a logger instance for a specific module.
 
+    Callers pass ``__name__``, which inside this package already starts with
+    ``memory_layer``. Prefixing unconditionally produced names like
+    ``memory_layer.memory_layer.core.embeddings``, which is what users saw in
+    every log line. Names from outside the package still get the prefix, so
+    ``setup_logging`` keeps one place to attach handlers.
+
     Args:
         name: Module name (typically __name__).
 
     Returns:
         Logger instance.
     """
+    if name == "memory_layer" or name.startswith("memory_layer."):
+        return logging.getLogger(name)
     return logging.getLogger(f"memory_layer.{name}")
 
 

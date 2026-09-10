@@ -2,7 +2,7 @@
 
 Persistent memory for AI coding agents with outcome-based learning.
 
-> **New to Memory Layer?** See the [User Guide](USER_GUIDE.md) for an introduction to using Memory Layer with Claude Code.
+> **New to Memory Layer?** See the [User Guide](https://github.com/runtimenoteslabs/memory-layer/blob/main/USER_GUIDE.md) for an introduction to using Memory Layer with Claude Code.
 
 ## What It Does
 
@@ -164,7 +164,7 @@ All agents share the same memory store. Memories created in Claude Code appear i
 
 ### Claude Code Integration
 
-Memory Layer integrates with Claude Code via hooks and skills. For a beginner-friendly walkthrough, see the [User Guide](USER_GUIDE.md).
+Memory Layer integrates with Claude Code via hooks and skills. For a beginner-friendly walkthrough, see the [User Guide](https://github.com/runtimenoteslabs/memory-layer/blob/main/USER_GUIDE.md).
 
 **Installation:**
 
@@ -258,7 +258,7 @@ hermes config set memory.provider memorylayer
 
 Hermes finds the provider through the `hermes_agent.memory_providers` entry
 point, so you do not edit its code or config files by hand. See
-[docs/hermes.md](docs/hermes.md) for configuration, the tool surface, and the
+[docs/hermes.md](https://github.com/runtimenoteslabs/memory-layer/blob/main/docs/hermes.md) for configuration, the tool surface, and the
 evaluation trace format.
 
 ### Web UI

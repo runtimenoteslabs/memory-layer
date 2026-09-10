@@ -760,7 +760,18 @@ class TestLocalProviderFallback:
         ):
             get_embedding_provider("local")
 
-        mock_logger.warning.assert_called_once()
-        message = mock_logger.warning.call_args.args[0]
+        mock_logger.info.assert_called_once()
+        message = mock_logger.info.call_args.args[0]
         assert "memory-layer-ai[embedding]" in message
         assert "memory-layer[embedding]" not in message
+
+    def test_fallback_does_not_warn(self) -> None:
+        """A base install is a supported setup, and the CLI builds a provider
+        per command, so this must not print on every invocation."""
+        with (
+            patch("memory_layer.core.embeddings.logger") as mock_logger,
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            get_embedding_provider("local")
+
+        mock_logger.warning.assert_not_called()

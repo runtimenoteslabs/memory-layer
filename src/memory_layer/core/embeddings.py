@@ -886,7 +886,10 @@ def get_embedding_provider(
     """
     if provider_type == "local":
         if importlib.util.find_spec("sentence_transformers") is None:
-            logger.warning(
+            # Info, not a warning: keyword retrieval is a supported way to run,
+            # and the CLI builds a provider for every command, so a warning here
+            # would print on each one. `mem check` reports the same state.
+            logger.info(
                 "sentence-transformers is not installed, so semantic search is "
                 "disabled and retrieval will use keyword matching only. "
                 "Install with: pip install 'memory-layer-ai[embedding]'"

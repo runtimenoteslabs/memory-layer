@@ -61,6 +61,21 @@ class TestLogging:
         logger = get_logger("test_module")
         assert logger.name == "memory_layer.test_module"
 
+    def test_get_logger_does_not_double_the_package_prefix(self) -> None:
+        """Callers pass __name__, which already starts with the package name."""
+        from memory_layer.core.logging import get_logger
+
+        logger = get_logger("memory_layer.core.embeddings")
+        assert logger.name == "memory_layer.core.embeddings"
+        assert get_logger("memory_layer").name == "memory_layer"
+
+    def test_get_logger_keeps_names_under_the_package(self) -> None:
+        """setup_logging attaches handlers to `memory_layer`, so names must sit under it."""
+        from memory_layer.core.logging import get_logger
+
+        assert get_logger("memory_layer.core.engine").name.startswith("memory_layer")
+        assert get_logger("outside_caller").name.startswith("memory_layer.")
+
     def test_setup_logging_json_output(self) -> None:
         """Test logging setup with JSON output."""
         from memory_layer.core.logging import JSONFormatter, setup_logging

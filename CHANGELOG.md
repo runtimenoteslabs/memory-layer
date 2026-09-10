@@ -2,6 +2,31 @@
 
 All notable changes to memory-layer will be documented in this file.
 
+## [2.2.2] - 2026-09-10
+
+### Fixed
+
+- Links in the README pointed at `USER_GUIDE.md` and `docs/hermes.md` by
+  relative path, which resolves against the repository but not against the
+  package page. They are absolute now.
+- Logger names carried the package prefix twice, so every log line read
+  `memory_layer.memory_layer.core.embeddings`. `get_logger()` adds the prefix
+  only when the caller's name is not already inside the package.
+
+### Added
+
+- `mem check` reports the embedding backend: the model name when one is
+  loaded, and otherwise a note that search is keyword-only along with the extra
+  to install. A missing backend is reported as information rather than an
+  issue, since keyword retrieval is a supported way to run.
+
+### Changed
+
+- The notice about `sentence-transformers` being absent is logged at INFO
+  rather than WARNING. The CLI builds an embedding provider once per command,
+  so at WARNING it printed on every invocation. Run with `-v` to see it, or
+  `mem check` for the same information.
+
 ## [2.2.1] - 2026-09-10
 
 ### Fixed
@@ -96,6 +121,7 @@ All notable changes to memory-layer will be documented in this file.
 - Production hardening: a custom exception hierarchy with readable messages,
   configuration handling, and observability.
 
+[2.2.2]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.2
 [2.2.1]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.1
 [2.2.0]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.0
 [2.1.1]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.1.1

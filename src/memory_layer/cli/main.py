@@ -800,17 +800,29 @@ def check_health(ctx: click.Context, fix: bool) -> None:
         total = stats.storage_stats.total_memories
         click.echo(f"[OK] Memory count: {total} memories")
 
-        # Check 4: Embedding provider
+        # Check 4: Retriever
         if hasattr(engine, '_retriever') and engine._retriever:
             click.echo("[OK] Retriever initialized")
         else:
             click.echo("[INFO] Retriever not yet initialized (will init on first search)")
 
+        # Check 5: Embedding backend. Not an issue when absent, since keyword
+        # retrieval needs no extra packages, but silence here would leave a
+        # base install wondering why search behaves the way it does.
+        provider = engine.embedding_provider
+        if provider.available:
+            click.echo(f"[OK] Embedding backend: {provider.model_name}")
+        else:
+            click.echo(
+                "[INFO] No embedding backend, so search uses keyword matching only. "
+                "For semantic search: pip install 'memory-layer-ai[embedding]'"
+            )
+
     except Exception as e:
         issues.append(f"Engine initialization failed: {e}")
         click.echo(f"[ISSUE] Engine initialization failed: {e}")
 
-    # Check 5: Environment variables
+    # Check 6: Environment variables
     click.echo()
     click.echo("Configuration:")
     click.echo(f"  MEMORY_LAYER_DB: {os.environ.get('MEMORY_LAYER_DB', '(default)')}")
