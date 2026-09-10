@@ -2,6 +2,38 @@
 
 All notable changes to memory-layer will be documented in this file.
 
+## [2.2.1] - 2026-09-10
+
+### Fixed
+
+- A base install now works without the embedding extra. `sentence-transformers`
+  is optional, but asking for the `local` provider without it raised
+  `ModelNotFoundError` on the first embed, which took down `mem add` and every
+  other write. The factory now falls back to a null provider that indexes no
+  vectors, leaving retrieval on the BM25 half of the hybrid. Install
+  `memory-layer-ai[embedding]` to turn semantic search back on.
+- The Hermes provider no longer selects `mock` embeddings when
+  `sentence-transformers` is missing. Mock vectors are hash-derived, so writing
+  them into a store that Claude Code and MCP clients share put meaningless
+  vectors next to real ones. It now asks for `local` and lets the factory
+  decide, which is the single place that check belongs.
+
+### Added
+
+- `null` is an accepted embedding provider name, so semantic search can be
+  turned off deliberately. Useful against a store holding vectors from another
+  model, where a fresh model's scores would be meaningless.
+- The `mem` CLI reads `MEMORY_LAYER_DATABASE__PATH` as well as
+  `MEMORY_LAYER_DB`. The settings docs named a third variable,
+  `MEMORY_LAYER_DB_PATH`, that was recognised nowhere and silently fell through
+  to the default store.
+
+### Changed
+
+- `mem check` reports a missing embedding backend as `unavailable` rather than
+  `unhealthy`, and names the extra to install. Keyword retrieval is a working
+  state, not a broken one.
+
 ## [2.2.0] - 2026-09-10
 
 ### Added
@@ -64,6 +96,7 @@ All notable changes to memory-layer will be documented in this file.
 - Production hardening: a custom exception hierarchy with readable messages,
   configuration handling, and observability.
 
+[2.2.1]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.1
 [2.2.0]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.0
 [2.1.1]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.1.1
 [2.1.0]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.1.0
