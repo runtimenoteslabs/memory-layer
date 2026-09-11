@@ -10,7 +10,7 @@ This package provides:
 
 from __future__ import annotations
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 __author__ = "exitcode42"
 
 from runtime_memory.core.legacy_env import apply_legacy_env

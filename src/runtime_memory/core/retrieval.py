@@ -12,11 +12,12 @@ Provides intelligent memory retrieval with:
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from runtime_memory.core.embeddings import EmbeddingProvider  # noqa: TC001
 from runtime_memory.core.logging import get_logger
@@ -32,11 +33,15 @@ EmbeddingVector = list[float]
 class RetrievalConfig:
     """Configuration for the retrieval system."""
 
-    # Scoring weights (should sum to 1.0 for normalized scoring)
-    semantic_weight: float = 0.5
-    recency_weight: float = 0.25
+    # Scoring weights. These are the five signals the README and the design
+    # notes document, and they sum to 1.0. RetrievalSettings in core/config.py
+    # carries the same numbers for settings-file configuration; a test asserts
+    # the two agree, because they silently disagreed once.
+    semantic_weight: float = 0.35
+    outcome_weight: float = 0.25
+    recency_weight: float = 0.15
     frequency_weight: float = 0.15
-    outcome_weight: float = 0.1
+    confidence_weight: float = 0.10
 
     # BM25 parameters
     bm25_k1: float = 1.5  # Term frequency saturation
@@ -75,6 +80,29 @@ class RetrievalConfig:
                 MemoryCategory.CONVENTION: 0.9,
                 MemoryCategory.COMMAND: 0.9,
             }
+
+    @classmethod
+    def from_env(cls, **overrides: Any) -> RetrievalConfig:
+        """Build a config, letting the environment override any signal weight.
+
+        Reads ``RUNTIME_MEMORY_SEMANTIC_WEIGHT`` and the matching names for
+        outcome, recency, frequency and confidence. Weights are applied as
+        given, never renormalised: an ablation that zeroes one signal should
+        leave the others exactly where they were, not silently reweight them.
+
+        Args:
+            **overrides: Field values that win over both defaults and env.
+
+        Returns:
+            A config with any environment overrides applied.
+        """
+        values: dict[str, Any] = {}
+        for signal in ("semantic", "outcome", "recency", "frequency", "confidence"):
+            raw = os.environ.get(f"RUNTIME_MEMORY_{signal.upper()}_WEIGHT")
+            if raw is not None:
+                values[f"{signal}_weight"] = float(raw)
+        values.update(overrides)
+        return cls(**values)
 
 
 class BM25Index:
@@ -268,9 +296,10 @@ class HybridRetriever:
 
     Implements the scoring formula:
     final_score = (semantic_weight * semantic_score +
+                   outcome_weight * outcome_score +
                    recency_weight * recency_score +
                    frequency_weight * frequency_score +
-                   outcome_weight * outcome_score) * category_boost
+                   confidence_weight * confidence) * category_boost
     """
 
     def __init__(
@@ -468,15 +497,19 @@ class HybridRetriever:
         # Get outcome score (already in -1 to 1 range, normalize to 0-1)
         outcome_score = (memory.outcome_score + 1.0) / 2.0
 
+        # Extraction confidence, already 0-1
+        confidence_score = memory.confidence
+
         # Get category boost
         category_boost = self.config.category_boosts.get(memory.category, 1.0)
 
         # Calculate final weighted score
         final_score = (
             self.config.semantic_weight * semantic_score
+            + self.config.outcome_weight * outcome_score
             + self.config.recency_weight * recency_score
             + self.config.frequency_weight * frequency_score
-            + self.config.outcome_weight * outcome_score
+            + self.config.confidence_weight * confidence_score
         ) * category_boost
 
         return SearchResult(

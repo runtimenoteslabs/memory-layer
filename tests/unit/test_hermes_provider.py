@@ -209,6 +209,31 @@ class TestLifecycle:
 # =============================================================================
 
 
+class TestDefaultStore:
+    """The setup wizard and the provider must not name the pre-3.0 directory.
+
+    `hermes memory setup` offers this default and writes the answer to Hermes'
+    .env, so a stale path there is not a cosmetic slip: it points a fresh
+    install at a store that does not exist.
+    """
+
+    def test_config_schema_offers_the_current_store(self, provider):
+        schema = {field["key"]: field for field in provider.get_config_schema()}
+
+        assert schema["db_path"]["default"].endswith("/.runtime-memory/memories.db")
+        assert ".memory-layer" not in schema["db_path"]["default"]
+        assert schema["db_path"]["env_var"] == "RUNTIME_MEMORY_DB"
+
+    def test_provider_defaults_to_the_current_store(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("RUNTIME_MEMORY_DB", raising=False)
+        monkeypatch.delenv("MEMORY_LAYER_DB", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        instance = RuntimeMemoryProvider()
+
+        assert instance._db_path == tmp_path / ".runtime-memory" / "memories.db"
+
+
 class TestEmbeddingBackend:
     """The store is shared, so a missing model must not turn into fake vectors."""
 

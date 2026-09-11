@@ -1,4 +1,4 @@
-"""memory-layer as a Hermes Agent memory provider.
+"""runtime-memory as a Hermes Agent memory provider.
 
 Hermes discovers this through the ``hermes_agent.memory_providers`` entry point
 and activates it with ``memory.provider: runtimememory``. Once active it replaces
@@ -37,6 +37,8 @@ from runtime_memory.core.models import (
     MemorySource,
     Outcome,
 )
+from runtime_memory.core.paths import default_db_path
+from runtime_memory.core.retrieval import RetrievalConfig
 from runtime_memory.hermes._base import (
     INDICATOR_GLYPH,
     MemoryProvider,
@@ -55,7 +57,6 @@ logger = get_logger(__name__)
 PROVIDER_NAME = "runtimememory"
 PROVIDER_LABEL = "Runtime Memory"
 
-DEFAULT_DB_PATH = "~/.memory-layer/memories.db"
 DEFAULT_RECALL_LIMIT = 8
 DEFAULT_MIN_SCORE = 0.0
 
@@ -66,7 +67,7 @@ _MIRROR_CATEGORY = {
     "memory": MemoryCategory.CONTEXT,
     "user": MemoryCategory.PREFERENCE,
 }
-"""Hermes built-in write targets mapped onto memory-layer categories."""
+"""Hermes built-in write targets mapped onto Runtime Memory categories."""
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -90,7 +91,7 @@ def _embedding_provider_name() -> str:
 
 
 class RuntimeMemoryProvider(MemoryProvider):
-    """Hermes memory provider backed by a local memory-layer engine."""
+    """Hermes memory provider backed by a local Runtime Memory engine."""
 
     pre_compress_checkpoint_api_version = 1
 
@@ -101,7 +102,9 @@ class RuntimeMemoryProvider(MemoryProvider):
         self._project: str | None = None
         self._writes_allowed: bool = True
 
-        self._db_path: Path = Path(os.environ.get("RUNTIME_MEMORY_DB", DEFAULT_DB_PATH)).expanduser()
+        self._db_path: Path = Path(
+            os.environ.get("RUNTIME_MEMORY_DB") or default_db_path()
+        ).expanduser()
         self._recall_limit: int = int(
             os.environ.get("RUNTIME_MEMORY_RECALL_LIMIT", DEFAULT_RECALL_LIMIT)
         )
@@ -132,7 +135,7 @@ class RuntimeMemoryProvider(MemoryProvider):
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
             return os.access(self._db_path.parent, os.W_OK)
         except OSError as exc:
-            logger.debug(f"memory-layer unavailable: {exc}")
+            logger.debug(f"Runtime Memory unavailable: {exc}")
             return False
 
     def unavailable_reason(self) -> str:
@@ -168,6 +171,10 @@ class RuntimeMemoryProvider(MemoryProvider):
             db_path=str(self._db_path),
             embedding_provider=_embedding_provider_name(),
             track_last_search=True,
+            # Signal weights come from the environment so an evaluation arm can
+            # ablate one, such as running with outcome weight 0 to separate a
+            # shared store from the learning on top of it.
+            retrieval_config=RetrievalConfig.from_env(),
         )
 
         engine = MemoryEngine(config=config)
@@ -180,7 +187,7 @@ class RuntimeMemoryProvider(MemoryProvider):
         spawn(self._warm(), label="warmup")
 
         logger.info(
-            f"memory-layer ready (db={self._db_path}, project={self._project}, "
+            f"Runtime Memory ready (db={self._db_path}, project={self._project}, "
             f"writes={'on' if self._writes_allowed else 'off'})"
         )
 
@@ -499,7 +506,7 @@ class RuntimeMemoryProvider(MemoryProvider):
             {
                 "key": "db_path",
                 "description": "SQLite store shared with Claude Code and MCP clients",
-                "default": DEFAULT_DB_PATH,
+                "default": str(default_db_path()),
                 "env_var": "RUNTIME_MEMORY_DB",
                 "type": "text",
             },

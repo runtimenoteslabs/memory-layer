@@ -92,8 +92,13 @@ class EmbeddingConfig(BaseModel):
     )
 
 
-class RetrievalConfig(BaseModel):
-    """Retrieval system configuration."""
+class RetrievalSettings(BaseModel):
+    """Retrieval weights as settings.
+
+    Named apart from ``RetrievalConfig`` in core/retrieval.py, which is what
+    actually scores a search. Two classes sharing one name is how the shipped
+    weights drifted from the documented ones without anyone noticing.
+    """
 
     semantic_weight: float = Field(
         default=0.35,
@@ -280,7 +285,7 @@ class Settings(BaseSettings):
     # Component configs
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
-    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     server: ServerConfig = Field(default_factory=ServerConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

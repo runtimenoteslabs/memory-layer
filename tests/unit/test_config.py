@@ -12,7 +12,7 @@ from runtime_memory.core.config import (
     Environment,
     ExtractionConfig,
     LoggingConfig,
-    RetrievalConfig,
+    RetrievalSettings,
     ServerConfig,
     Settings,
     clear_settings_cache,
@@ -102,12 +102,12 @@ class TestEmbeddingConfig:
             EmbeddingConfig(cache_size=200000)
 
 
-class TestRetrievalConfig:
-    """Tests for RetrievalConfig."""
+class TestRetrievalSettings:
+    """Tests for RetrievalSettings."""
 
     def test_default_weights(self):
         """Test default retrieval weights sum to 1."""
-        config = RetrievalConfig()
+        config = RetrievalSettings()
         total = (
             config.semantic_weight
             + config.outcome_weight
@@ -120,16 +120,16 @@ class TestRetrievalConfig:
     def test_weight_validation(self):
         """Test weight validation."""
         with pytest.raises(ValueError):
-            RetrievalConfig(semantic_weight=-0.1)
+            RetrievalSettings(semantic_weight=-0.1)
         with pytest.raises(ValueError):
-            RetrievalConfig(semantic_weight=1.5)
+            RetrievalSettings(semantic_weight=1.5)
 
     def test_half_life_validation(self):
         """Test half life days validation."""
         with pytest.raises(ValueError):
-            RetrievalConfig(recency_half_life_days=0)
+            RetrievalSettings(recency_half_life_days=0)
         with pytest.raises(ValueError):
-            RetrievalConfig(recency_half_life_days=400)
+            RetrievalSettings(recency_half_life_days=400)
 
 
 class TestServerConfig:
@@ -206,7 +206,7 @@ class TestSettings:
         assert settings.env == Environment.DEVELOPMENT
         assert isinstance(settings.database, DatabaseConfig)
         assert isinstance(settings.embedding, EmbeddingConfig)
-        assert isinstance(settings.retrieval, RetrievalConfig)
+        assert isinstance(settings.retrieval, RetrievalSettings)
         assert isinstance(settings.server, ServerConfig)
 
     def test_for_testing(self):

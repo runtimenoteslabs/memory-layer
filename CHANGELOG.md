@@ -2,6 +2,30 @@
 
 All notable changes to Runtime Memory will be documented in this file.
 
+## [3.1.0] - 2026-09-11
+
+### Fixed
+
+- **Retrieval scored four signals, not the five that are documented, and
+  weighted them differently.** The retriever used semantic 0.50, recency 0.25,
+  frequency 0.15 and outcome 0.10, with extraction confidence absent from the
+  formula. Everything describing the system, the README included, states
+  semantic 0.35, outcome 0.25, recency 0.15, frequency 0.15 and confidence
+  0.10. The scoring now matches: outcome carries the weight it is supposed to,
+  and confidence is a term rather than a category-router detail. Rankings will
+  shift, most visibly for memories with a recorded outcome.
+- `RetrievalConfig` existed twice with different defaults, once in
+  `core/retrieval.py` (which scores) and once in `core/config.py` (which does
+  not). That is how the two drifted unnoticed. The settings one is now
+  `RetrievalSettings`, and a test asserts the two sets of weights agree.
+- The Hermes provider still defaulted to `~/.memory-layer/memories.db`, the
+  pre-3.0 store, when `RUNTIME_MEMORY_DB` was unset. `hermes memory setup`
+  offered that path as its default and wrote the answer into Hermes'
+  environment, so a fresh install was configured to read a database that does
+  not exist. It now uses the shared default, which resolves to
+  `~/.runtime-memory/` and falls back to the old directory only when that one
+  is actually there.
+
 ## [3.0.0] - 2026-09-11
 
 The project is now **Runtime Memory**, published as `runtime-memory` and
@@ -161,6 +185,7 @@ so nothing installed from there is affected.
 - Production hardening: a custom exception hierarchy with readable messages,
   configuration handling, and observability.
 
+[3.1.0]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v3.1.0
 [3.0.0]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v3.0.0
 [2.2.2]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.2
 [2.2.1]: https://github.com/runtimenoteslabs/memory-layer/releases/tag/v2.2.1

@@ -27,10 +27,11 @@ def mock_provider() -> MockEmbeddingProvider:
 def retrieval_config() -> RetrievalConfig:
     """Create a retrieval config for testing."""
     return RetrievalConfig(
-        semantic_weight=0.5,
-        recency_weight=0.25,
+        semantic_weight=0.35,
+        outcome_weight=0.25,
+        recency_weight=0.15,
         frequency_weight=0.15,
-        outcome_weight=0.1,
+        confidence_weight=0.10,
         recency_half_life_days=30.0,
     )
 
@@ -52,6 +53,7 @@ def create_memory(
     use_count: int = 0,
     days_old: float = 0.0,
     archived: bool = False,
+    confidence: float = 1.0,
 ) -> Memory:
     """Helper to create test memories."""
     created_at = datetime.now(UTC) - timedelta(days=days_old)
@@ -64,6 +66,7 @@ def create_memory(
         created_at=created_at,
         updated_at=created_at,
         archived=archived,
+        confidence=confidence,
     )
 
 
@@ -173,16 +176,124 @@ class TestBM25Index:
         assert len(results) == 2
 
 
+class TestConfigFromEnv:
+    """An evaluation arm needs to ablate one signal without touching the code."""
+
+    def test_defaults_when_nothing_is_set(self, monkeypatch) -> None:
+        for signal in ("SEMANTIC", "OUTCOME", "RECENCY", "FREQUENCY", "CONFIDENCE"):
+            monkeypatch.delenv(f"RUNTIME_MEMORY_{signal}_WEIGHT", raising=False)
+
+        config = RetrievalConfig.from_env()
+
+        assert config.outcome_weight == 0.25
+        assert config.semantic_weight == 0.35
+
+    def test_env_ablates_a_signal(self, monkeypatch) -> None:
+        monkeypatch.setenv("RUNTIME_MEMORY_OUTCOME_WEIGHT", "0")
+
+        config = RetrievalConfig.from_env()
+
+        assert config.outcome_weight == 0.0
+        # The others keep their weights: dropping a signal must not silently
+        # reweight the rest, or the ablation measures two changes at once.
+        assert config.semantic_weight == 0.35
+        assert config.recency_weight == 0.15
+        assert config.frequency_weight == 0.15
+        assert config.confidence_weight == 0.10
+
+    def test_explicit_argument_beats_the_environment(self, monkeypatch) -> None:
+        monkeypatch.setenv("RUNTIME_MEMORY_OUTCOME_WEIGHT", "0")
+
+        config = RetrievalConfig.from_env(outcome_weight=0.25)
+
+        assert config.outcome_weight == 0.25
+
+
+class TestConfidenceSignal:
+    """Extraction confidence is one of the five weighted signals.
+
+    It was documented as 10% of the score but was absent from the formula
+    entirely, contributing only a category-router boost.
+    """
+
+    @pytest.mark.asyncio
+    async def test_confidence_separates_otherwise_equal_memories(
+        self, retriever: HybridRetriever
+    ) -> None:
+        sure = create_memory("pytest runs from the repo root", confidence=1.0)
+        unsure = create_memory("pytest runs from the repo root", confidence=0.2)
+        retriever.add_memory(sure)
+        retriever.add_memory(unsure)
+
+        results = await retriever.search("pytest repo root")
+
+        ranked = {r.memory.id: r.score for r in results}
+        assert ranked[sure.id] > ranked[unsure.id]
+
+    @pytest.mark.asyncio
+    async def test_confidence_contributes_its_documented_share(
+        self, retriever: HybridRetriever
+    ) -> None:
+        """A full-confidence memory carries the whole 0.10, a zero one none."""
+        sure = create_memory("ruff replaced flake8", confidence=1.0)
+        unsure = create_memory("ruff replaced flake8", confidence=0.0)
+        retriever.add_memory(sure)
+        retriever.add_memory(unsure)
+
+        results = await retriever.search("ruff flake8")
+
+        ranked = {r.memory.id: r.score for r in results}
+        gap = ranked[sure.id] - ranked[unsure.id]
+        assert abs(gap - 0.10) < 1e-6
+
+
 class TestRetrievalConfig:
     """Tests for RetrievalConfig."""
 
     def test_default_values(self) -> None:
         """Test default configuration values."""
         config = RetrievalConfig()
-        assert config.semantic_weight == 0.5
-        assert config.recency_weight == 0.25
+        assert config.semantic_weight == 0.35
+        assert config.outcome_weight == 0.25
+        assert config.recency_weight == 0.15
+        assert config.frequency_weight == 0.15
+        assert config.confidence_weight == 0.10
         assert config.recency_half_life_days == 30.0
         assert config.default_limit == 10
+
+    def test_weights_sum_to_one(self) -> None:
+        """The score is a weighted average, so the weights must normalise."""
+        config = RetrievalConfig()
+        total = (
+            config.semantic_weight
+            + config.outcome_weight
+            + config.recency_weight
+            + config.frequency_weight
+            + config.confidence_weight
+        )
+
+        assert abs(total - 1.0) < 1e-9
+
+    def test_matches_the_settings_class(self) -> None:
+        """The two classes must agree.
+
+        They are separate objects with the same five weights, and they drifted
+        apart once: the retriever scored outcome at 0.1 while every document and
+        the settings model said 0.25.
+        """
+        from runtime_memory.core.config import RetrievalSettings
+
+        scoring = RetrievalConfig()
+        settings = RetrievalSettings()
+
+        for weight in (
+            "semantic_weight",
+            "outcome_weight",
+            "recency_weight",
+            "frequency_weight",
+            "confidence_weight",
+        ):
+            assert getattr(scoring, weight) == getattr(settings, weight), weight
 
     def test_default_category_boosts(self) -> None:
         """Test default category boosts are set."""
