@@ -2,7 +2,7 @@
 
 All notable changes to Runtime Memory will be documented in this file.
 
-## [3.1.0] - 2026-09-11
+## [3.1.0] - 2026-09-17
 
 ### Added
 
@@ -43,7 +43,6 @@ All notable changes to Runtime Memory will be documented in this file.
 - An empty recall left no trace record, so a recall that found nothing and a
   recall that never happened were indistinguishable in the log. Both are
   recorded now.
-
 - **Retrieval scored four signals, not the five that are documented, and
   weighted them differently.** The retriever used semantic 0.50, recency 0.25,
   frequency 0.15 and outcome 0.10, with extraction confidence absent from the
