@@ -12,11 +12,14 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import logging
 import sys
+import time
 import tomllib
 from pathlib import Path
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from runtime_memory.core.models import Outcome
 from runtime_memory.hermes import RuntimeMemoryProvider, register
@@ -356,6 +359,26 @@ class TestRecall:
         """No memories means no block, not an empty heading."""
         assert provider.prefetch("anything at all?") == ""
 
+    def test_empty_recall_is_still_traced(self, tmp_path, monkeypatch):
+        """A recall that found nothing must be distinguishable from no recall."""
+        trace_path = tmp_path / "trace.jsonl"
+        monkeypatch.setenv(TRACE_ENV_VAR, str(trace_path))
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "empty.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-empty", agent_context="primary")
+        try:
+            block = instance.prefetch("how do I run the tests in this project?")
+        finally:
+            instance.shutdown()
+
+        assert block == ""
+        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line]
+        recalls = [r for r in records if r["event"] == "recall"]
+        assert len(recalls) == 1
+        assert recalls[0]["retrieved"] == []
+
     def test_recall_survives_engine_failure(self, provider, monkeypatch):
         """A broken search costs the recall, never the turn."""
 
@@ -447,6 +470,125 @@ class TestWrites:
             assert _call(instance, "runtimememory_recall", query="blocked")["count"] == 0
         finally:
             instance.shutdown()
+
+    def test_extraction_is_refused_without_the_package(self, tmp_path, monkeypatch):
+        """A missing dependency is said out loud, not discovered a session later."""
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACT_ON_END", "true")
+        monkeypatch.setitem(sys.modules, "anthropic", None)
+
+        # Asserted on the logger rather than caplog: setup_logging turns off
+        # propagation for this package, so caplog is empty whenever another test
+        # has configured logging first.
+        instance = RuntimeMemoryProvider()
+        with patch("runtime_memory.hermes.provider.logger") as mock_logger:
+            instance.initialize("session-no-package", agent_context="primary")
+        try:
+            assert instance._extract_on_end is False
+            warnings = " ".join(str(call) for call in mock_logger.warning.call_args_list)
+            assert "anthropic package is not installed" in warnings
+        finally:
+            instance.shutdown()
+
+    def test_extraction_is_refused_without_credentials(self, tmp_path, monkeypatch):
+        """The wizard offers this option whether or not a key was ever entered.
+
+        Exercises the real check: the SDK constructs a client happily with no
+        credentials at all and only fails at request time, so "did it construct"
+        is not a usable test.
+        """
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACT_ON_END", "true")
+        for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_FEDERATION_RULE_ID"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        instance = RuntimeMemoryProvider()
+        with patch("runtime_memory.hermes.provider.logger") as mock_logger:
+            instance.initialize("session-no-key", agent_context="primary")
+        try:
+            assert instance._extract_on_end is False
+            warnings = " ".join(str(call) for call in mock_logger.warning.call_args_list)
+            assert "no Anthropic credentials" in warnings
+        finally:
+            instance.shutdown()
+
+    def test_a_key_in_the_environment_is_enough(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACT_ON_END", "true")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-key", agent_context="primary")
+        try:
+            assert instance._extract_on_end is True
+        finally:
+            instance.shutdown()
+
+    def test_extraction_stays_on_when_usable(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACT_ON_END", "true")
+
+        with patch(
+            "runtime_memory.hermes.provider._extraction_unavailable_reason",
+            return_value=None,
+        ):
+            instance = RuntimeMemoryProvider()
+            instance.initialize("session-ok", agent_context="primary")
+            try:
+                assert instance._extract_on_end is True
+            finally:
+                instance.shutdown()
+
+    def test_extraction_runs_when_enabled(self, tmp_path, monkeypatch):
+        """Session end extracts, and the trace records how many memories landed."""
+        trace_path = tmp_path / "trace.jsonl"
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "extract.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACT_ON_END", "true")
+        monkeypatch.setenv(TRACE_ENV_VAR, str(trace_path))
+        # The startup check refuses extraction without a credential, and the
+        # extractor itself is mocked, so nothing reaches the network.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+
+        extracted = MagicMock()
+        extracted.success = True
+        extracted.error = None
+        extracted.memory_count = 2
+
+        extractor = MagicMock()
+        extractor.return_value.extract_and_store = AsyncMock(return_value=extracted)
+
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-extract", agent_context="primary")
+        try:
+            with patch(
+                "runtime_memory.extraction.extractor.MemoryExtractor", extractor
+            ):
+                instance.on_session_end(
+                    [
+                        {"role": "user", "content": "money must be Decimal here"},
+                        {"role": "assistant", "content": "noted"},
+                    ]
+                )
+                # No polling: the hook blocks until extraction finishes. Hermes
+                # tears the provider down the moment it returns, so anything
+                # still in flight at that point is lost.
+                assert trace_path.exists(), "on_session_end returned before extraction finished"
+        finally:
+            instance.shutdown()
+
+        transcript = extractor.return_value.extract_and_store.call_args.kwargs["transcript"]
+        assert "money must be Decimal here" in transcript
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line]
+        writes = [r for r in records if r["event"] == "write"]
+        assert writes and writes[0]["kind"] == "extraction"
+        assert writes[0]["count"] == 2
 
     def test_extraction_is_off_by_default(self, provider):
         """Session end costs nothing unless extraction is switched on."""

@@ -295,6 +295,10 @@ class TestRetrievalConfig:
         ):
             assert getattr(scoring, weight) == getattr(settings, weight), weight
 
+    def test_outcome_gates_frequency_is_off_by_default(self) -> None:
+        """Default scoring must not change for anyone who has not opted in."""
+        assert RetrievalConfig().outcome_gates_frequency is False
+
     def test_default_category_boosts(self) -> None:
         """Test default category boosts are set."""
         config = RetrievalConfig()
@@ -528,6 +532,43 @@ class TestScoringComponents:
 
         assert len(results) == 1
         assert results[0].frequency_score > 0.5
+
+    async def test_frequency_ignores_outcome_by_default(
+        self, retriever: HybridRetriever
+    ) -> None:
+        """Without the gate, a memory at the outcome floor keeps its full boost.
+
+        This is the shipped behaviour the gate exists to change: retrieval counts
+        as use, and use pays whatever the outcome record says.
+        """
+        memory = create_memory("Popular but failing memory", use_count=50, outcome_score=-1.0)
+        retriever.add_memory(memory)
+
+        results = await retriever.search("memory")
+
+        assert results[0].frequency_score > 0.5
+
+    @pytest.mark.parametrize(
+        ("outcome_score", "factor"),
+        [(0.6, 1.0), (0.0, 1.0), (-0.5, 0.5), (-1.0, 0.0)],
+    )
+    async def test_gated_frequency_scales_with_a_negative_outcome(
+        self,
+        mock_provider: MockEmbeddingProvider,
+        outcome_score: float,
+        factor: float,
+    ) -> None:
+        """With the gate on, the boost is untouched at or above zero and gone at -1."""
+        ungated = HybridRetriever(mock_provider, RetrievalConfig())
+        gated = HybridRetriever(mock_provider, RetrievalConfig(outcome_gates_frequency=True))
+        ungated.add_memory(create_memory("Popular memory", use_count=50, outcome_score=outcome_score))
+        gated.add_memory(create_memory("Popular memory", use_count=50, outcome_score=outcome_score))
+
+        base = (await ungated.search("memory"))[0].frequency_score
+        result = (await gated.search("memory"))[0].frequency_score
+
+        assert base > 0.5
+        assert result == pytest.approx(base * factor)
 
     async def test_category_boost(self, retriever: HybridRetriever) -> None:
         """Test category boost affects scores."""
@@ -837,3 +878,148 @@ class TestSemanticScoreWithoutVectors:
         hit_score = retriever._calculate_semantic_score(hit, "pytest cache", [])
         miss_score = retriever._calculate_semantic_score(miss, "pytest cache", [])
         assert hit_score > miss_score
+
+
+class TestRelevancePool:
+    """Two-stage retrieval: relevance picks the pool, the full score picks from it.
+
+    Memories are added without vectors, so relevance is BM25 alone and each case
+    can state exactly which words a memory shares with the query.
+    """
+
+    QUERY = "clear the pytest cache when tests fail randomly"
+
+    @staticmethod
+    def retriever(factor: float | None) -> HybridRetriever:
+        return HybridRetriever(
+            MockEmbeddingProvider(), RetrievalConfig(relevance_pool_factor=factor)
+        )
+
+    @staticmethod
+    def unrelated_and_relevant() -> tuple[Memory, Memory]:
+        """A well-used gotcha that shares no word with the query, and a match."""
+        unrelated = create_memory(
+            "Never use mutable default arguments in Python",
+            category=MemoryCategory.GOTCHA,
+            use_count=50,
+            outcome_score=0.6,
+        )
+        relevant = create_memory(
+            "Clear the pytest cache when tests fail randomly",
+            category=MemoryCategory.CONVENTION,
+        )
+        return unrelated, relevant
+
+    @staticmethod
+    def graded() -> list[Memory]:
+        """Memories from most to least relevant, the most relevant with a failing record."""
+        return [
+            create_memory("Clear the pytest cache when tests fail randomly", outcome_score=-1.0),
+            create_memory("Tests fail randomly when the cache is stale", outcome_score=1.0),
+            create_memory("Randomly failing tests usually share state"),
+            # Shares only "the" with the query, and is boosted and heavily used.
+            create_memory(
+                "Pin dependency versions in the lockfile",
+                category=MemoryCategory.GOTCHA,
+                outcome_score=1.0,
+                use_count=80,
+            ),
+        ]
+
+    async def test_single_stage_can_rank_an_unrelated_memory_first(self) -> None:
+        """The shipped behaviour this option exists to change."""
+        retriever = self.retriever(None)
+        unrelated, relevant = self.unrelated_and_relevant()
+        for memory in (unrelated, relevant):
+            retriever.add_memory(memory)
+
+        results = await retriever.search(self.QUERY, limit=1)
+
+        assert results[0].memory.id == unrelated.id
+        assert results[0].semantic_score == 0.0
+
+    async def test_pool_keeps_an_unrelated_memory_out(self) -> None:
+        retriever = self.retriever(1.0)
+        unrelated, relevant = self.unrelated_and_relevant()
+        for memory in (unrelated, relevant):
+            retriever.add_memory(memory)
+
+        results = await retriever.search(self.QUERY, limit=1)
+
+        assert results[0].memory.id == relevant.id
+
+    async def test_memory_with_no_relevance_is_never_returned(self) -> None:
+        """Single-stage fills the limit whatever matches; the pool does not."""
+        unrelated, relevant = self.unrelated_and_relevant()
+        single, pooled = self.retriever(None), self.retriever(2.0)
+        for retriever in (single, pooled):
+            retriever.add_memory(unrelated)
+            retriever.add_memory(relevant)
+
+        assert len(await single.search(self.QUERY, limit=5)) == 2
+        results = await pooled.search(self.QUERY, limit=5)
+        assert [r.memory.id for r in results] == [relevant.id]
+
+    @pytest.mark.parametrize(
+        ("factor", "expected"),
+        [
+            # A pool the size of the limit: the other signals can only reorder,
+            # so the most relevant memory stays despite failing.
+            (1.0, "Clear the pytest cache when tests fail randomly"),
+            # ceil(1 x 1.5) = 2: the next most relevant can replace it.
+            (1.5, "Tests fail randomly when the cache is stale"),
+            (2.0, "Tests fail randomly when the cache is stale"),
+        ],
+    )
+    async def test_pool_size_decides_what_outcome_can_replace(
+        self, factor: float, expected: str
+    ) -> None:
+        retriever = self.retriever(factor)
+        for memory in self.graded():
+            retriever.add_memory(memory)
+
+        results = await retriever.search(self.QUERY, limit=1)
+
+        assert results[0].memory.content == expected
+
+    async def test_other_signals_still_order_the_pool(self) -> None:
+        """Within the pool the full score decides, so the most relevant memory,
+        which keeps failing, ranks below the next one, which keeps working."""
+        retriever = self.retriever(1.0)
+        memories = self.graded()
+        for memory in memories:
+            retriever.add_memory(memory)
+
+        results = await retriever.search(self.QUERY, limit=3)
+
+        assert {r.memory.id for r in results} == {m.id for m in memories[:3]}
+        assert results[0].semantic_score < results[1].semantic_score
+        assert [r.memory.id for r in results[:2]] == [memories[1].id, memories[0].id]
+
+    async def test_without_the_pool_a_weak_match_wins_on_boost_and_use(self) -> None:
+        retriever = self.retriever(None)
+        memories = self.graded()
+        for memory in memories:
+            retriever.add_memory(memory)
+
+        results = await retriever.search(self.QUERY, limit=1)
+
+        assert results[0].memory.id == memories[3].id
+
+    def test_off_by_default(self) -> None:
+        assert RetrievalConfig().relevance_pool_factor is None
+
+    def test_factor_below_one_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"at least 1\.0"):
+            RetrievalConfig(relevance_pool_factor=0.5)
+
+    @pytest.mark.parametrize(("raw", "expected"), [(None, None), ("", None), ("2", 2.0)])
+    def test_read_from_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: float | None
+    ) -> None:
+        if raw is None:
+            monkeypatch.delenv("RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR", raising=False)
+        else:
+            monkeypatch.setenv("RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR", raw)
+
+        assert RetrievalConfig.from_env().relevance_pool_factor == expected

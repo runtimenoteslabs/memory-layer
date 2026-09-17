@@ -4,7 +4,45 @@ All notable changes to Runtime Memory will be documented in this file.
 
 ## [3.1.0] - 2026-09-11
 
+### Added
+
+- **`RetrievalConfig.outcome_gates_frequency`**, off by default. Retrieval
+  counts as use, so a memory that keeps being retrieved keeps gaining frequency
+  score even when every outcome recorded against it is a failure, and once its
+  outcome score reaches the floor of -1.0 further failures cost it nothing. The
+  Tier 2 evaluation found a wrong memory holding a top-8 place this way through
+  a whole task sequence. With the option on, the frequency score is scaled by
+  1 + outcome_score, clamped to [0, 1]: a memory at or above zero keeps its
+  boost and one at the floor loses it. Default scoring is unchanged.
+- **`RetrievalConfig.relevance_pool_factor`, two-stage retrieval**, off by
+  default and settable as `RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR`. Only the
+  semantic signal depends on the query, and category boost multiplies the whole
+  score, so a memory that barely matches can outrank one that matches well.
+  Replaying both Tier 2 runs exactly, the top 8 shared only four memories on
+  average with the eight most relevant, and the corpus v1 note that stayed
+  injected on all 45 outcome-weight-0 tasks ranked about 25th of 38 on
+  relevance; without category boost it would have been injected on 5. With a
+  factor set, a search keeps the `ceil(limit x factor)` most relevant
+  candidates, drops any with no relevance at all, and ranks only those on the
+  full score. Default scoring is unchanged.
+
 ### Fixed
+
+- **Session-end extraction was requested and silently did nothing.** It needs
+  the `anthropic` package and a credential, and without either it failed on a
+  background task at session end where the exception is swallowed, so the
+  provider reported extraction as on while nothing was ever extracted. The
+  provider now checks at startup and says what is missing, then runs without it.
+  An unset `ANTHROPIC_API_KEY` is not taken to mean there is no credential: an
+  auth token, a signed-in profile and workload identity federation each count.
+- **The extraction model defaults were a generation behind**, and the call sent
+  `temperature`, which Claude 4.6 and later reject with a 400. Extraction now
+  defaults to `claude-sonnet-5` (and `claude-haiku-4-5` in the settings model)
+  and no longer sends the parameter. The `temperature` field remains so existing
+  configuration keeps loading; it is documented as ignored.
+- An empty recall left no trace record, so a recall that found nothing and a
+  recall that never happened were indistinguishable in the log. Both are
+  recorded now.
 
 - **Retrieval scored four signals, not the five that are documented, and
   weighted them differently.** The retriever used semantic 0.50, recency 0.25,

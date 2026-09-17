@@ -317,14 +317,25 @@ class ExtractionConfig:
     """Configuration for the extraction pipeline."""
 
     # LLM settings
-    model: str = "claude-sonnet-4-20250514"
-    """Model to use for extraction."""
+    model: str = "claude-sonnet-5"
+    """Model to use for extraction.
+
+    Extraction is a bulk structured-output task, so it runs on a cheaper model
+    than a reasoning workload would. Claude 4.x ids still resolve today but are
+    a generation behind and will eventually retire.
+    """
 
     max_tokens: int = 4096
     """Maximum tokens in response."""
 
     temperature: float = 0.1
-    """Temperature for generation (low for consistency)."""
+    """Ignored since the move to Claude 5.
+
+    ``temperature`` was removed on Claude 4.6 and later and the API rejects it
+    with a 400. The field stays so existing configuration keeps loading, and it
+    records the original intent of deterministic extraction, but it is no longer
+    sent. Determinism now comes from the prompt and the schema.
+    """
 
     # Rate limiting
     rate_limit_rpm: int = 50
@@ -701,10 +712,11 @@ class MemoryExtractor:
         await self._rate_limiter.acquire(estimated_tokens)
 
         client = self._get_client()
+        # No temperature: the parameter was removed on Claude 4.6 and later and
+        # sending it returns a 400.
         response = await client.messages.create(
             model=self.config.model,
             max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )

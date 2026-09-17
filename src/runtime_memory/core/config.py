@@ -179,7 +179,7 @@ class ExtractionConfig(BaseModel):
     """LLM extraction configuration."""
 
     model: str = Field(
-        default="claude-3-haiku-20240307",
+        default="claude-haiku-4-5",
         description="LLM model for extraction",
     )
     max_tokens: int = Field(

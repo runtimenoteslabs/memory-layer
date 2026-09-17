@@ -30,7 +30,7 @@ class TestExtractionConfig:
     def test_default_config(self) -> None:
         """Test default configuration values."""
         config = ExtractionConfig()
-        assert config.model == "claude-sonnet-4-20250514"
+        assert config.model == "claude-sonnet-5"
         assert config.max_tokens == 4096
         assert config.temperature == 0.1
         assert config.rate_limit_rpm == 50

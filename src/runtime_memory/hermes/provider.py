@@ -59,6 +59,8 @@ PROVIDER_LABEL = "Runtime Memory"
 
 DEFAULT_RECALL_LIMIT = 8
 DEFAULT_MIN_SCORE = 0.0
+EXTRACTION_TIMEOUT = 180.0
+"""Seconds to wait for session-end extraction. It is one LLM round trip."""
 
 _WRITE_CONTEXTS = frozenset({"primary", ""})
 """Agent contexts allowed to write. Subagents, cron and flush runs read only."""
@@ -76,6 +78,48 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _extraction_unavailable_reason() -> str | None:
+    """Why session-end extraction cannot run, or None when it can.
+
+    Extraction needs a package and a credential, and the failure without either
+    is invisible: it happens on a background task at session end, where the
+    exception is swallowed so a lost extraction never takes a session with it.
+    A provider that reports extraction as on while nothing is ever extracted is
+    worse than one that refuses, so the check happens once at startup where it
+    can still be said out loud.
+
+    An unset ``ANTHROPIC_API_KEY`` does not mean there is no credential. The SDK
+    also accepts an auth token, a signed-in profile on disk, and workload
+    identity federation, so each documented source is checked before refusing.
+
+    Returns:
+        A reason to show the operator, or None when extraction is usable.
+    """
+    try:
+        import anthropic  # noqa: PLC0415
+    except ImportError:
+        return "the anthropic package is not installed (pip install 'runtime-memory[extraction]')"
+
+    # Let the SDK apply its own precedence to the environment rather than
+    # reimplementing it. Construction does not raise when nothing resolves.
+    try:
+        client = anthropic.AsyncAnthropic()
+        if getattr(client, "api_key", None) or getattr(client, "auth_token", None):
+            return None
+    except Exception:  # noqa: BLE001 - an unconstructable client is also a refusal
+        pass
+
+    if os.environ.get("ANTHROPIC_FEDERATION_RULE_ID"):
+        return None
+    if (Path.home() / ".config" / "anthropic").exists():
+        return None
+
+    return (
+        "no Anthropic credentials are configured (set ANTHROPIC_API_KEY, or sign "
+        "in with `ant auth login`)"
+    )
 
 
 def _embedding_provider_name() -> str:
@@ -160,6 +204,14 @@ class RuntimeMemoryProvider(MemoryProvider):
         self._writes_allowed = agent_context in _WRITE_CONTEXTS
         if not self._writes_allowed:
             logger.info(f"Read-only in '{agent_context}' context")
+
+        if self._extract_on_end:
+            reason = _extraction_unavailable_reason()
+            if reason:
+                logger.warning(
+                    f"Extraction at session end was requested but is off: {reason}"
+                )
+                self._extract_on_end = False
 
         workspace = kwargs.get("agent_workspace")
         self._project = os.environ.get("RUNTIME_MEMORY_PROJECT") or (
@@ -264,12 +316,12 @@ class RuntimeMemoryProvider(MemoryProvider):
             logger.warning(f"Recall failed: {exc}")
             return ""
 
-        if not results:
-            return ""
-
         self._last_ids = [r.memory.id for r in results]
         self._last_count = len(results)
 
+        # Traced even when nothing came back. A recall that found nothing and a
+        # recall that never happened look identical in an untraced run, and the
+        # difference is the whole question when a store is still filling up.
         self._trace.recall(
             turn_id=self._turn_id,
             session_id=session_id or self._session_id,
@@ -278,6 +330,9 @@ class RuntimeMemoryProvider(MemoryProvider):
             project=self._project,
             latency_ms=(time.perf_counter() - started) * 1000,
         )
+
+        if not results:
+            return ""
         return self._format(results)
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
@@ -368,7 +423,16 @@ class RuntimeMemoryProvider(MemoryProvider):
         if self._engine is None or not messages:
             return
         logger.info(f"Session end: extraction over {len(messages)} messages")
-        spawn(self._extract(messages), label="extraction")
+        # Blocking, not spawned. Hermes calls this hook and then immediately
+        # tears the provider down; in one-shot mode the process exits straight
+        # after. Fired and forgotten, the extraction never survived long enough
+        # to write anything, which looked exactly like extraction being off.
+        # Hermes documents this hook as LLM-bound and runs it on a background
+        # worker, so waiting here is what the contract expects.
+        try:
+            run_sync(self._extract(messages), timeout=EXTRACTION_TIMEOUT)
+        except Exception as exc:  # a lost extraction must not take the session with it
+            logger.warning(f"Extraction failed: {exc}")
 
     async def _extract(self, messages: list[dict[str, Any]]) -> None:
         """Run LLM extraction over a finished session.

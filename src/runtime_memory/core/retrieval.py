@@ -58,6 +58,28 @@ class RetrievalConfig:
     frequency_log_base: float = 2.0  # Log base for frequency scaling
     max_frequency_boost: float = 2.0  # Maximum frequency boost
 
+    # Whether a memory's outcome record limits its frequency boost. Off by
+    # default, which scores exactly as before. Retrieval counts as use, so a
+    # memory that keeps being retrieved keeps gaining frequency even while every
+    # outcome recorded against it is a failure, and once its outcome score is at
+    # the floor of -1.0 further failures cost it nothing. With this on, the
+    # frequency score is scaled by 1 + outcome_score, clamped to [0, 1]: a memory
+    # at or above zero is untouched and a memory at the floor gets no boost.
+    outcome_gates_frequency: bool = False
+
+    # Two-stage retrieval. None, the default, scores exactly as before: every
+    # candidate competes on the full score, of which only the semantic signal
+    # depends on the query, so category boost, outcome and frequency can seat a
+    # memory that barely matches the query above one that matches it well. The
+    # Tier 2 evaluation found a gotcha ranked 25th of 38 on relevance injected
+    # first. Set to a factor of at least 1.0, a search first keeps the
+    # ceil(limit x factor) candidates with the highest semantic score, dropping
+    # any with none at all, and only that pool competes on the full score. The
+    # other signals then choose among relevant memories rather than decide
+    # whether an unrelated one gets in. At 1.0 they can only reorder; above it
+    # they can replace a relevant memory that keeps failing with the next one.
+    relevance_pool_factor: float | None = None
+
     # Category boosting
     category_boosts: dict[MemoryCategory, float] = field(default_factory=dict)
 
@@ -67,7 +89,16 @@ class RetrievalConfig:
     dedup_threshold: float = 0.95  # Similarity threshold for deduplication
 
     def __post_init__(self) -> None:
-        """Set default category boosts if not provided."""
+        """Set default category boosts if not provided, and check the pool factor.
+
+        Raises:
+            ValueError: If ``relevance_pool_factor`` is below 1.0, which would make
+                the pool smaller than the limit it is meant to fill.
+        """
+        if self.relevance_pool_factor is not None and self.relevance_pool_factor < 1.0:
+            raise ValueError(
+                f"relevance_pool_factor must be at least 1.0, got {self.relevance_pool_factor}"
+            )
         if not self.category_boosts:
             self.category_boosts = {
                 MemoryCategory.GOTCHA: 1.3,  # Boost gotchas (important warnings)
@@ -89,6 +120,8 @@ class RetrievalConfig:
         outcome, recency, frequency and confidence. Weights are applied as
         given, never renormalised: an ablation that zeroes one signal should
         leave the others exactly where they were, not silently reweight them.
+        ``RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR`` turns on two-stage retrieval;
+        unset or empty leaves it off.
 
         Args:
             **overrides: Field values that win over both defaults and env.
@@ -101,6 +134,9 @@ class RetrievalConfig:
             raw = os.environ.get(f"RUNTIME_MEMORY_{signal.upper()}_WEIGHT")
             if raw is not None:
                 values[f"{signal}_weight"] = float(raw)
+        pool = os.environ.get("RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR", "").strip()
+        if pool:
+            values["relevance_pool_factor"] = float(pool)
         values.update(overrides)
         return cls(**values)
 
@@ -425,11 +461,17 @@ class HybridRetriever:
             return []
 
         # Score all candidates
-        results: list[SearchResult] = []
-        for memory in candidates:
-            result = self._score_memory(memory, query, query_embedding)
-            if result.score >= min_score:
-                results.append(result)
+        results = [
+            self._score_memory(memory, query, query_embedding) for memory in candidates
+        ]
+
+        # See RetrievalConfig.relevance_pool_factor. Relevance is decided before
+        # min_score, so a relevant memory with a poor record is not replaced in
+        # the pool by a less relevant one that happens to clear the threshold.
+        if self.config.relevance_pool_factor is not None:
+            results = self._relevance_pool(results, limit)
+
+        results = [result for result in results if result.score >= min_score]
 
         # Sort by score descending
         results.sort(key=lambda r: r.score, reverse=True)
@@ -438,6 +480,23 @@ class HybridRetriever:
         results = self._deduplicate(results)
 
         return results[:limit]
+
+    def _relevance_pool(self, results: list[SearchResult], limit: int) -> list[SearchResult]:
+        """Keep the candidates most relevant to the query, the first retrieval stage.
+
+        Args:
+            results: Scored candidates.
+            limit: The number of results the search will return.
+
+        Returns:
+            Up to ``ceil(limit x relevance_pool_factor)`` results with a semantic
+            score above zero, most relevant first.
+        """
+        factor = self.config.relevance_pool_factor or 1.0
+        size = math.ceil(limit * factor)
+        relevant = [result for result in results if result.semantic_score > 0]
+        relevant.sort(key=lambda r: r.semantic_score, reverse=True)
+        return relevant[:size]
 
     def _get_candidates(
         self,
@@ -609,6 +668,11 @@ class HybridRetriever:
         # Assume use_count of ~100 gives max score
         max_expected = math.log(1 + 100, log_base)
         normalized = min(score / max_expected, 1.0)
+
+        # See RetrievalConfig.outcome_gates_frequency. Without the gate, being
+        # retrieved pays the same whether the memory helped or kept failing.
+        if self.config.outcome_gates_frequency:
+            normalized *= min(1.0, max(0.0, 1.0 + memory.outcome_score))
 
         return normalized
 

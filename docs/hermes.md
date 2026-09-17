@@ -55,14 +55,25 @@ beyond the provider name.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MEMORY_LAYER_DB` | `~/.runtime-memory/memories.db` | The shared store |
-| `MEMORY_LAYER_EMBEDDING` | `local` | `local`, `null`, `mock`, `openai`, `voyage` |
-| `MEMORY_LAYER_RECALL_LIMIT` | `8` | Memories injected per turn |
-| `MEMORY_LAYER_MIN_SCORE` | `0.0` | Relevance floor for injection |
-| `MEMORY_LAYER_PROJECT` | workspace name | Project scope for memories |
-| `MEMORY_LAYER_MIRROR_WRITES` | `true` | Mirror built-in memory writes |
-| `MEMORY_LAYER_EXTRACT_ON_END` | `false` | Extract memories at session end |
-| `MEMORY_LAYER_HERMES_TRACE` | unset | Path for the evaluation trace |
+| `RUNTIME_MEMORY_DB` | `~/.runtime-memory/memories.db` | The shared store |
+| `RUNTIME_MEMORY_EMBEDDING` | `local` | `local`, `null`, `mock`, `openai`, `voyage` |
+| `RUNTIME_MEMORY_RECALL_LIMIT` | `8` | Memories injected per turn |
+| `RUNTIME_MEMORY_MIN_SCORE` | `0.0` | Floor on the combined score for injection |
+| `RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR` | unset | Two-stage recall, see below |
+| `RUNTIME_MEMORY_PROJECT` | workspace name | Project scope for memories |
+| `RUNTIME_MEMORY_MIRROR_WRITES` | `true` | Mirror built-in memory writes |
+| `RUNTIME_MEMORY_EXTRACT_ON_END` | `false` | Extract memories at session end |
+| `RUNTIME_MEMORY_HERMES_TRACE` | unset | Path for the evaluation trace |
+
+By default every memory competes on one combined score, and only its semantic
+part depends on the message, so a gotcha that is often recalled and has worked
+before can take a slot from a memory that matches the message far better.
+Setting `RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR` splits recall in two: the
+`recall_limit x factor` memories most relevant to the message form a pool, a
+memory with no relevance at all never enters it, and only the pool competes on
+the combined score. At `1` the other signals can only reorder what relevance
+picked; at `2` they can replace up to every slot with the next most relevant
+memory, which is what lets a memory that keeps failing drop out.
 
 `local` degrades on its own: without `sentence-transformers` it indexes no
 vectors and retrieval scores on keywords alone. Set `null` to force that even
@@ -109,11 +120,11 @@ specific memory and can see that it has failed before. Calling
 
 ## Evaluation trace
 
-Setting `MEMORY_LAYER_HERMES_TRACE` writes one JSONL record per recall, write,
+Setting `RUNTIME_MEMORY_HERMES_TRACE` writes one JSONL record per recall, write,
 and outcome:
 
 ```bash
-export MEMORY_LAYER_HERMES_TRACE=~/traces/hermes-run.jsonl
+export RUNTIME_MEMORY_HERMES_TRACE=~/traces/hermes-run.jsonl
 ```
 
 Records share a `turn_id`, so joining `recall` to `outcome` on it reconstructs,
