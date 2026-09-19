@@ -373,13 +373,16 @@ class CommandHandler:
                 error=f"No memory found with ID: {memory_id}",
             )
 
-        # Record the outcome
+        # Record the outcome. The engine stores no notes, so they are only echoed back.
         old_score = memory.outcome_score
-        updated_memory = await self.engine.record_outcome(
-            memory_id=memory_id,
-            outcome=outcome,
-            context=notes,
-        )
+        updated = await self.engine.record_outcome([memory_id], outcome)
+        if not updated:
+            return CommandResult(
+                success=False,
+                command=CommandType.OUTCOME,
+                message="Memory not found",
+                error=f"No memory found with ID: {memory_id}",
+            )
 
         return CommandResult(
             success=True,
@@ -389,7 +392,7 @@ class CommandHandler:
                 "memory_id": memory_id,
                 "outcome": outcome.value,
                 "old_score": old_score,
-                "new_score": updated_memory.outcome_score,
+                "new_score": updated[0].outcome_score,
                 "notes": notes,
             },
         )

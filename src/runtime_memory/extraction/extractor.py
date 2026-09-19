@@ -269,6 +269,10 @@ class ConflictResult:
     should_supersede: bool
     """Whether new memory should supersede existing."""
 
+    new_index: int | None = None
+    """Position of the new memory in the extraction's memories. A result
+    without one is not tied to any new memory, so it never supersedes."""
+
 
 @dataclass
 class ExtractionResult:
@@ -924,7 +928,7 @@ class MemoryExtractor:
         """
         conflicts: list[ConflictResult] = []
 
-        for new_mem in new_memories:
+        for index, new_mem in enumerate(new_memories):
             # Find potentially related existing memories
             for existing in existing_memories:
                 # Quick category match check
@@ -943,6 +947,7 @@ class MemoryExtractor:
                 try:
                     conflict = await self._classify_conflict(new_mem, existing)
                     if conflict.relationship != ConflictRelationship.UNRELATED:
+                        conflict.new_index = index
                         conflicts.append(conflict)
                 except Exception as e:
                     logger.warning(f"Conflict classification failed: {e}")
@@ -1055,15 +1060,20 @@ class MemoryExtractor:
             return result
 
         # Handle conflicts and store
-        for memory in result.memories:
-            # Check if this memory has conflicts that require superseding
-            supersedes_id: str | None = None
-            for conflict in result.conflicts:
-                if conflict.should_supersede and conflict.relationship == ConflictRelationship.UPDATES:
-                    # Find if this conflict is for the current memory
-                    # (simplified: just use the first supersede candidate)
-                    supersedes_id = conflict.existing_id
-                    break
+        for index, memory in enumerate(result.memories):
+            # Only a conflict classified for this memory can make it supersede
+            # another. Taking any conflict in the batch pointed every new memory
+            # at the same superseded one.
+            supersedes_id = next(
+                (
+                    conflict.existing_id
+                    for conflict in result.conflicts
+                    if conflict.new_index == index
+                    and conflict.should_supersede
+                    and conflict.relationship == ConflictRelationship.UPDATES
+                ),
+                None,
+            )
 
             # Store the memory
             await engine.add(

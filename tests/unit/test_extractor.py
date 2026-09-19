@@ -725,6 +725,85 @@ class TestConflictResult:
         assert conflict.existing_id == "mem-123"
         assert conflict.relationship == ConflictRelationship.UPDATES
         assert conflict.should_supersede is True
+        assert conflict.new_index is None
+
+
+def _updates(existing_id: str, new_index: int | None) -> ConflictResult:
+    return ConflictResult(
+        existing_id=existing_id,
+        relationship=ConflictRelationship.UPDATES,
+        confidence=0.9,
+        explanation="newer",
+        should_supersede=True,
+        new_index=new_index,
+    )
+
+
+class TestSupersedeAttribution:
+    """A new memory supersedes only what its own conflict check said it updates."""
+
+    @pytest.mark.asyncio
+    async def test_detect_conflicts_records_which_new_memory(self) -> None:
+        """Each conflict carries the position of the new memory it was found for."""
+        extractor = MemoryExtractor()
+        existing = Memory(
+            id="old", content="Use pip to install dependencies", category=MemoryCategory.COMMAND
+        )
+        new = [
+            ExtractedMemory(content="Deploy on Fridays", category=MemoryCategory.DECISION),
+            ExtractedMemory(content="Use uv to install dependencies", category=MemoryCategory.COMMAND),
+        ]
+        extractor._classify_conflict = AsyncMock(return_value=_updates("old", None))
+
+        conflicts = await extractor._detect_conflicts(new, [existing])
+
+        assert [c.new_index for c in conflicts] == [1]
+
+    @pytest.mark.asyncio
+    async def test_only_the_updating_memory_supersedes(self) -> None:
+        """The unrelated memory in the same batch supersedes nothing."""
+        extractor = MemoryExtractor()
+        extractor.extract_from_transcript = AsyncMock(
+            return_value=ExtractionResult(
+                memories=[
+                    ExtractedMemory(content="Deploy on Fridays", category=MemoryCategory.DECISION),
+                    ExtractedMemory(content="Use uv", category=MemoryCategory.COMMAND),
+                ],
+                summary="",
+                transcript_length=0,
+                extraction_time_ms=0.0,
+                conflicts=[_updates("old", 1)],
+            )
+        )
+        engine = MagicMock()
+        engine.list = AsyncMock(return_value=[])
+        engine.add = AsyncMock()
+
+        await extractor.extract_and_store("transcript", engine, project="p")
+
+        supersedes = [call.kwargs["supersedes"] for call in engine.add.await_args_list]
+        assert supersedes == [None, "old"]
+
+    @pytest.mark.asyncio
+    async def test_conflict_without_position_supersedes_nothing(self) -> None:
+        """A result not tied to a new memory is never applied to one."""
+        extractor = MemoryExtractor()
+        extractor.extract_from_transcript = AsyncMock(
+            return_value=ExtractionResult(
+                memories=[ExtractedMemory(content="Use uv", category=MemoryCategory.COMMAND)],
+                summary="",
+                transcript_length=0,
+                extraction_time_ms=0.0,
+                conflicts=[_updates("old", None)],
+            )
+        )
+        engine = MagicMock()
+        engine.list = AsyncMock(return_value=[])
+        engine.add = AsyncMock()
+
+        await extractor.extract_and_store("transcript", engine, project="p")
+
+        assert engine.add.await_args.kwargs["supersedes"] is None
 
 
 class TestConflictRelationship:

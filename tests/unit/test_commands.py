@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 
@@ -17,6 +17,7 @@ from runtime_memory.claude_code.commands import (
     export_command_schemas,
     get_command_schemas,
 )
+from runtime_memory.core.engine import MemoryEngine
 from runtime_memory.core.models import (
     Memory,
     MemoryCategory,
@@ -211,7 +212,9 @@ class TestCommandHandler:
         engine.delete = AsyncMock()
         engine.search = AsyncMock()
         engine.list = AsyncMock()
-        engine.record_outcome = AsyncMock()
+        # Specced against the real method: an unspecced mock accepted the wrong
+        # keywords and hid a TypeError that every /outcome call raised.
+        engine.record_outcome = create_autospec(MemoryEngine, instance=True).record_outcome
         engine.get_context = AsyncMock()
         engine.stats = AsyncMock()
         return engine
@@ -432,15 +435,15 @@ class TestCommandHandler:
             source=sample_memory.source,
             outcome_score=0.7,
         )
-        mock_engine.record_outcome.return_value = updated_memory
+        mock_engine.record_outcome.return_value = [updated_memory]
 
         result = await handler.execute("outcome", "test-123 worked", "test-project")
 
         assert result.success is True
         assert result.command == CommandType.OUTCOME
-        mock_engine.record_outcome.assert_called_once()
-        call_args = mock_engine.record_outcome.call_args
-        assert call_args.kwargs["outcome"] == Outcome.WORKED
+        mock_engine.record_outcome.assert_awaited_once_with(["test-123"], Outcome.WORKED)
+        assert result.data["old_score"] == 0.5
+        assert result.data["new_score"] == 0.7
 
     @pytest.mark.asyncio
     async def test_outcome_failed(
@@ -448,13 +451,12 @@ class TestCommandHandler:
     ) -> None:
         """Test recording failed outcome."""
         mock_engine.get.return_value = sample_memory
-        mock_engine.record_outcome.return_value = sample_memory
+        mock_engine.record_outcome.return_value = [sample_memory]
 
         result = await handler.execute("outcome", "test-123 failed", "test-project")
 
         assert result.success is True
-        call_args = mock_engine.record_outcome.call_args
-        assert call_args.kwargs["outcome"] == Outcome.FAILED
+        mock_engine.record_outcome.assert_awaited_once_with(["test-123"], Outcome.FAILED)
 
     @pytest.mark.asyncio
     async def test_outcome_with_notes(
@@ -462,16 +464,28 @@ class TestCommandHandler:
     ) -> None:
         """Test outcome with notes."""
         mock_engine.get.return_value = sample_memory
-        mock_engine.record_outcome.return_value = sample_memory
+        mock_engine.record_outcome.return_value = [sample_memory]
 
         result = await handler.execute(
             "outcome", "test-123 partial The solution was outdated", "test-project"
         )
 
         assert result.success is True
-        call_args = mock_engine.record_outcome.call_args
-        assert call_args.kwargs["outcome"] == Outcome.PARTIAL
-        assert call_args.kwargs["context"] == "The solution was outdated"
+        mock_engine.record_outcome.assert_awaited_once_with(["test-123"], Outcome.PARTIAL)
+        assert result.data["notes"] == "The solution was outdated"
+
+    @pytest.mark.asyncio
+    async def test_outcome_memory_gone_before_update(
+        self, handler: CommandHandler, mock_engine: MagicMock, sample_memory: Memory
+    ) -> None:
+        """A memory removed between lookup and update is reported, not a crash."""
+        mock_engine.get.return_value = sample_memory
+        mock_engine.record_outcome.return_value = []
+
+        result = await handler.execute("outcome", "test-123 worked", "test-project")
+
+        assert result.success is False
+        assert "no memory found" in result.error.lower()
 
     @pytest.mark.asyncio
     async def test_outcome_invalid(
