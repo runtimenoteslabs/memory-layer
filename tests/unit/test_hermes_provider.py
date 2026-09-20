@@ -642,11 +642,16 @@ class TestTools:
         assert stats["by_category"]["gotcha"] == 1
 
     def test_explicit_recall_joins_the_turn(self, provider):
-        """A tool search is creditable by a later outcome, like automatic recall."""
+        """A tool search returns ids a later outcome can name."""
         _call(provider, "runtimememory_remember", content="A fact", category="general")
 
-        _call(provider, "runtimememory_recall", query="fact")
-        result = _call(provider, "runtimememory_outcome", outcome="worked")
+        recalled = _call(provider, "runtimememory_recall", query="fact")
+        result = _call(
+            provider,
+            "runtimememory_outcome",
+            outcome="worked",
+            memory_ids=[m["id"] for m in recalled["memories"]],
+        )
 
         assert result["recorded"] is True
 
@@ -659,9 +664,31 @@ class TestTools:
 class TestOutcomes:
     """Tests for the feedback loop, which is the point of the integration."""
 
-    def test_outcome_defaults_to_this_turn(self, provider):
-        """The model need not repeat ids back to score what it was given."""
-        _call(
+    def test_outcome_names_the_memories_it_is_about(self, provider):
+        """An outcome reaches the memories named, and scores them."""
+        stored = _call(
+            provider,
+            "runtimememory_remember",
+            content="Restart the daemon",
+            category="troubleshooting",
+        )
+        provider.prefetch("daemon is stuck")
+
+        result = _call(
+            provider, "runtimememory_outcome", outcome="worked", memory_ids=[stored["memory_id"]]
+        )
+
+        assert result["recorded"] is True
+        assert result["updated"][0]["outcome_score"] == pytest.approx(0.2)
+
+    def test_outcome_without_ids_is_declined(self, provider):
+        """Before 4.0.0 this scored every memory recalled in the turn.
+
+        The Tier 2 evaluation measured that contract three times, and each time
+        it left the store worse than recording nothing: the memory that misled
+        the turn and the memory that was right about the same thing sank together.
+        """
+        stored = _call(
             provider,
             "runtimememory_remember",
             content="Restart the daemon",
@@ -671,8 +698,18 @@ class TestOutcomes:
 
         result = _call(provider, "runtimememory_outcome", outcome="worked")
 
-        assert result["recorded"] is True
-        assert result["updated"][0]["outcome_score"] == pytest.approx(0.2)
+        assert result["recorded"] is False
+        assert "memory_ids" in result["reason"]
+        after = _call(provider, "runtimememory_recall", query="daemon is stuck")
+        assert after["memories"][0]["id"] == stored["memory_id"]
+        assert after["memories"][0]["outcome_score"] == 0.0
+
+    def test_outcome_with_an_unknown_id_is_an_error(self, provider):
+        result = _call(
+            provider, "runtimememory_outcome", outcome="worked", memory_ids=["not-an-id"]
+        )
+
+        assert "not-an-id" in result["error"]
 
     def test_failure_costs_more_than_success_gains(self, provider):
         """The asymmetry that makes bad advice sink is preserved end to end."""
@@ -718,9 +755,16 @@ class TestTrace:
         instance = RuntimeMemoryProvider()
         instance.initialize("session-9")
         try:
-            _call(instance, "runtimememory_remember", content="A useful fact", category="general")
+            stored = _call(
+                instance, "runtimememory_remember", content="A useful fact", category="general"
+            )
             instance.prefetch("tell me the fact")
-            _call(instance, "runtimememory_outcome", outcome="worked")
+            _call(
+                instance,
+                "runtimememory_outcome",
+                outcome="worked",
+                memory_ids=[stored["memory_id"]],
+            )
         finally:
             instance.shutdown()
 
@@ -730,7 +774,28 @@ class TestTrace:
         assert by_event["recall"]["retrieved"][0]["memory_id"]
         assert by_event["recall"]["turn_id"] == by_event["outcome"]["turn_id"]
         assert by_event["outcome"]["outcome"] == "worked"
-        assert by_event["outcome"]["origin"] == "auto"
+        assert by_event["outcome"]["origin"] == "tool"
+
+    def test_records_an_outcome_it_declined(self, tmp_path, monkeypatch):
+        """A declined outcome is visible, so a silent loop can be told from a quiet one."""
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "m.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+        trace_path = tmp_path / "traces" / "declined.jsonl"
+        monkeypatch.setenv(TRACE_ENV_VAR, str(trace_path))
+
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-10")
+        try:
+            _call(instance, "runtimememory_remember", content="A useful fact", category="general")
+            instance.prefetch("tell me the fact")
+            _call(instance, "runtimememory_outcome", outcome="worked")
+        finally:
+            instance.shutdown()
+
+        events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+        declined = next(e for e in events if e["event"] == "outcome")
+        assert declined["origin"] == "declined"
+        assert declined["memory_ids"] == []
         assert all("ts" in event for event in events)
 
     def test_broken_path_does_not_break_a_turn(self, tmp_path):

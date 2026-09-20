@@ -542,19 +542,40 @@ class RuntimeMemoryProvider(MemoryProvider):
     def record_outcome(
         self, *, outcome: Outcome, memory_ids: list[str] | None = None
     ) -> list[Memory]:
-        """Apply outcome feedback, defaulting to this turn's recalled memories."""
+        """Apply outcome feedback to the memories named, and only those.
+
+        Before 4.0.0 a call without ids applied the outcome to every memory
+        recalled in the turn. That is the contract the Tier 2 evaluation measured
+        three times, and each time it left the store worse than recording nothing:
+        a turn's verdict reached the memory that misled it and the memory that was
+        right about the same thing, so both sank together. An outcome now needs to
+        name what it is about. A caller that has no attribution records nothing,
+        which the trace shows as a declined outcome.
+        """
         engine = self._require_engine()
-        targets = memory_ids or self._last_ids
-        if not targets:
+        if not memory_ids:
+            logger.info(
+                "Outcome '%s' not recorded: no memory ids given. Name the memories "
+                "the outcome is about; %d were recalled this turn.",
+                outcome.value,
+                len(self._last_ids),
+            )
+            self._trace.outcome(
+                turn_id=self._turn_id,
+                session_id=self._session_id,
+                outcome=outcome.value,
+                memory_ids=[],
+                origin="declined",
+            )
             return []
 
-        updated = run_sync(engine.record_outcome(targets, outcome))
+        updated = run_sync(engine.record_outcome(memory_ids, outcome))
         self._trace.outcome(
             turn_id=self._turn_id,
             session_id=self._session_id,
             outcome=outcome.value,
             memory_ids=[memory.id for memory in updated],
-            origin="tool" if memory_ids else "auto",
+            origin="tool",
         )
         return updated
 

@@ -311,30 +311,47 @@ The asymmetric scoring is intentional: bad advice wastes debugging time and erod
 
 ## How Retrieval Works
 
-Runtime Memory uses a 5-signal hybrid retrieval system that combines multiple relevance signals:
+Retrieval runs in two stages. Relevance to your query decides which memories
+compete, then the other signals order them.
+
+**Stage 1, the relevance pool.** A search keeps the `ceil(limit x 2)` memories
+most relevant to the query and drops any with no relevance at all. A memory that
+does not match your query is not returned, however good its record.
+
+**Stage 2, the score.**
 
 | Signal | Weight | Description |
 |--------|--------|-------------|
-| Semantic | 35% | Vector similarity to your query |
+| Semantic | 55% | Vector and keyword similarity to your query |
 | Outcome | 25% | Learned effectiveness from feedback |
-| Recency | 15% | Recent memories weighted higher (30-day half-life) |
-| Frequency | 15% | Frequently used memories rise |
 | Confidence | 10% | Extraction confidence score |
+| Recency | 10% | Newer memories weighted higher (30-day half-life on age) |
+| Frequency | 0% | Off by default; see below |
 
-Two of the five signals, outcome and frequency, come from how memories have
-performed rather than from the query, so ranking changes as feedback accumulates.
+Outcome and confidence come from how memories have performed rather than from
+the query, so ranking changes as feedback accumulates.
 
-### Category Boosting
+**What changed in 4.0.0, and why.** Tier 2 evaluation runs found the older
+scoring deciding retrieval on signals that had nothing to do with the query:
 
-When you ask about errors, troubleshooting memories get a 1.5x boost. Query intent is detected and the right category is prioritized:
+- **Frequency left the default score.** It rewards having been retrieved, which
+  is not evidence of having helped, and it compounds: a wrong memory held a top
+  place through a whole task sequence on it. Set `frequency_weight` to bring it
+  back.
+- **Category boosts are neutral.** Multiplying the whole score by a category
+  seated a memory that ranked about 25th on relevance at rank 1, and in another
+  run kept the one memory that would have prevented a repeated mistake out of
+  every prompt. Pass `category_boosts` to set your own.
+- **Recency decays from a memory's age,** not from when it was last touched.
+  Retrieval no longer moves that clock.
 
-| Query Pattern | Boosted Category | Multiplier |
-|---------------|------------------|------------|
-| "What went wrong..." | troubleshooting | 1.5x |
-| "Watch out for..." | gotcha | 1.4x |
-| "Why did we choose..." | decision | 1.4x |
-| "How should I structure..." | pattern, convention | 1.3x |
-| "System design..." | architecture | 1.2x |
+`RetrievalConfig.legacy_3x()` restores the 3.x weights, boosts and single-stage
+scoring if you tuned for them.
+
+### Category routing
+
+`CategoryRouter` maps query wording to a category, but no search path calls it.
+It is available to callers that want to pass `category=` themselves.
 
 ## Results
 

@@ -186,7 +186,7 @@ class TestConfigFromEnv:
         config = RetrievalConfig.from_env()
 
         assert config.outcome_weight == 0.25
-        assert config.semantic_weight == 0.35
+        assert config.semantic_weight == 0.55
 
     def test_env_ablates_a_signal(self, monkeypatch) -> None:
         monkeypatch.setenv("RUNTIME_MEMORY_OUTCOME_WEIGHT", "0")
@@ -196,9 +196,9 @@ class TestConfigFromEnv:
         assert config.outcome_weight == 0.0
         # The others keep their weights: dropping a signal must not silently
         # reweight the rest, or the ablation measures two changes at once.
-        assert config.semantic_weight == 0.35
-        assert config.recency_weight == 0.15
-        assert config.frequency_weight == 0.15
+        assert config.semantic_weight == 0.55
+        assert config.recency_weight == 0.10
+        assert config.frequency_weight == 0.0
         assert config.confidence_weight == 0.10
 
     def test_explicit_argument_beats_the_environment(self, monkeypatch) -> None:
@@ -253,13 +253,43 @@ class TestRetrievalConfig:
     def test_default_values(self) -> None:
         """Test default configuration values."""
         config = RetrievalConfig()
-        assert config.semantic_weight == 0.35
+        assert config.semantic_weight == 0.55
         assert config.outcome_weight == 0.25
-        assert config.recency_weight == 0.15
-        assert config.frequency_weight == 0.15
+        assert config.recency_weight == 0.10
+        # Frequency left the default score in 4.0.0; the option stays.
+        assert config.frequency_weight == 0.0
         assert config.confidence_weight == 0.10
         assert config.recency_half_life_days == 30.0
         assert config.default_limit == 10
+        assert config.recency_from_created is True
+
+    def test_recency_decays_from_age_not_from_last_touch(self) -> None:
+        """A retrieval or an outcome must not make an old memory look new."""
+        config = RetrievalConfig()
+        retriever = HybridRetriever(MockEmbeddingProvider(), config)
+        old = create_memory("Clear the pytest cache when tests fail randomly")
+        old.created_at = datetime.now(UTC) - timedelta(days=60)
+        old.updated_at = datetime.now(UTC)
+
+        fresh = retriever._calculate_recency_score(old)
+        legacy = HybridRetriever(
+            MockEmbeddingProvider(), RetrievalConfig.legacy_3x()
+        )._calculate_recency_score(old)
+
+        assert fresh == pytest.approx(0.25, abs=0.01)  # two half-lives of age
+        assert legacy == pytest.approx(1.0, abs=0.01)  # touched just now
+
+    def test_legacy_3x_restores_the_shipped_scoring(self) -> None:
+        """Runs made against 3.x have to stay reproducible."""
+        config = RetrievalConfig.legacy_3x()
+        assert config.semantic_weight == 0.35
+        assert config.recency_weight == 0.15
+        assert config.frequency_weight == 0.15
+        assert config.relevance_pool_factor is None
+        assert config.recency_from_created is False
+        assert config.category_boosts[MemoryCategory.GOTCHA] == 1.3
+        assert config.category_boosts[MemoryCategory.CONVENTION] == 0.9
+        assert RetrievalConfig.legacy_3x(outcome_weight=0.0).outcome_weight == 0.0
 
     def test_weights_sum_to_one(self) -> None:
         """The score is a weighted average, so the weights must normalise."""
@@ -302,8 +332,8 @@ class TestRetrievalConfig:
     def test_default_category_boosts(self) -> None:
         """Test default category boosts are set."""
         config = RetrievalConfig()
-        assert MemoryCategory.GOTCHA in config.category_boosts
-        assert config.category_boosts[MemoryCategory.GOTCHA] == 1.3
+        # Neutral since 4.0.0: a category no longer multiplies the whole score.
+        assert config.category_boosts == {}
 
     def test_custom_category_boosts(self) -> None:
         """Test custom category boosts."""
@@ -407,8 +437,10 @@ class TestHybridRetriever:
         retriever.add_memory(memory1)
         retriever.add_memory(memory2)
 
+        # The query has to match something: since 4.0.0 a search returns only
+        # memories with some relevance to it.
         results = await retriever.search(
-            "test", category=MemoryCategory.PATTERN
+            "Pattern", category=MemoryCategory.PATTERN
         )
 
         assert len(results) == 1
@@ -587,7 +619,21 @@ class TestScoringComponents:
             "rule", category=MemoryCategory.CONVENTION
         )
 
-        # Both should have different category boosts
+        # Neutral by default since 4.0.0.
+        assert results_gotcha[0].category_boost == 1.0
+        assert results_conv[0].category_boost == 1.0
+
+    async def test_category_boost_when_configured(self) -> None:
+        """The boosts still apply when a caller asks for them."""
+        retriever = HybridRetriever(MockEmbeddingProvider(), RetrievalConfig.legacy_3x())
+        memory_gotcha = create_memory("Gotcha warning", category=MemoryCategory.GOTCHA)
+        memory_conv = create_memory("Convention rule", category=MemoryCategory.CONVENTION)
+        retriever.add_memory(memory_gotcha)
+        retriever.add_memory(memory_conv)
+
+        results_gotcha = await retriever.search("warning", category=MemoryCategory.GOTCHA)
+        results_conv = await retriever.search("rule", category=MemoryCategory.CONVENTION)
+
         assert results_gotcha[0].category_boost == 1.3
         assert results_conv[0].category_boost == 0.9
 
@@ -789,7 +835,7 @@ class TestEdgeCases:
         memory = create_memory("处理中文内容")
         retriever.add_memory(memory)
 
-        results = await retriever.search("中文")
+        results = await retriever.search("处理中文内容")
         assert len(results) == 1
 
     async def test_very_long_query(self, retriever: HybridRetriever) -> None:
@@ -896,6 +942,11 @@ class TestRelevancePool:
         )
 
     @staticmethod
+    def legacy_retriever() -> HybridRetriever:
+        """3.x scoring: no pool, category boosts, frequency in the score."""
+        return HybridRetriever(MockEmbeddingProvider(), RetrievalConfig.legacy_3x())
+
+    @staticmethod
     def unrelated_and_relevant() -> tuple[Memory, Memory]:
         """A well-used gotcha that shares no word with the query, and a match."""
         unrelated = create_memory(
@@ -927,8 +978,8 @@ class TestRelevancePool:
         ]
 
     async def test_single_stage_can_rank_an_unrelated_memory_first(self) -> None:
-        """The shipped behaviour this option exists to change."""
-        retriever = self.retriever(None)
+        """The 3.x behaviour this option exists to change."""
+        retriever = self.legacy_retriever()
         unrelated, relevant = self.unrelated_and_relevant()
         for memory in (unrelated, relevant):
             retriever.add_memory(memory)
@@ -997,7 +1048,8 @@ class TestRelevancePool:
         assert [r.memory.id for r in results[:2]] == [memories[1].id, memories[0].id]
 
     async def test_without_the_pool_a_weak_match_wins_on_boost_and_use(self) -> None:
-        retriever = self.retriever(None)
+        """3.x scoring: category boost and use count outrank relevance."""
+        retriever = self.legacy_retriever()
         memories = self.graded()
         for memory in memories:
             retriever.add_memory(memory)
@@ -1006,14 +1058,15 @@ class TestRelevancePool:
 
         assert results[0].memory.id == memories[3].id
 
-    def test_off_by_default(self) -> None:
-        assert RetrievalConfig().relevance_pool_factor is None
+    def test_on_by_default(self) -> None:
+        assert RetrievalConfig().relevance_pool_factor == 2.0
+        assert RetrievalConfig.legacy_3x().relevance_pool_factor is None
 
     def test_factor_below_one_is_rejected(self) -> None:
         with pytest.raises(ValueError, match=r"at least 1\.0"):
             RetrievalConfig(relevance_pool_factor=0.5)
 
-    @pytest.mark.parametrize(("raw", "expected"), [(None, None), ("", None), ("2", 2.0)])
+    @pytest.mark.parametrize(("raw", "expected"), [(None, 2.0), ("", 2.0), ("2", 2.0), ("3", 3.0)])
     def test_read_from_the_environment(
         self, monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: float | None
     ) -> None:

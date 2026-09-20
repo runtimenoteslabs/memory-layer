@@ -101,7 +101,7 @@ class RetrievalSettings(BaseModel):
     """
 
     semantic_weight: float = Field(
-        default=0.35,
+        default=0.55,
         ge=0.0,
         le=1.0,
         description="Weight for semantic similarity (0-1)",
@@ -113,13 +113,13 @@ class RetrievalSettings(BaseModel):
         description="Weight for outcome score (0-1)",
     )
     recency_weight: float = Field(
-        default=0.15,
+        default=0.10,
         ge=0.0,
         le=1.0,
         description="Weight for recency (0-1)",
     )
     frequency_weight: float = Field(
-        default=0.15,
+        default=0.0,
         ge=0.0,
         le=1.0,
         description="Weight for usage frequency (0-1)",

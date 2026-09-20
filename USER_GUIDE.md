@@ -191,7 +191,7 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
    - Recency (recent memories weighted higher)
    - Usage frequency (popular memories rise)
 
-3. **Smart Boosting**: When you ask about errors, troubleshooting memories are automatically prioritized. Ask "what's our convention...", and convention memories get boosted. The system detects your intent.
+3. **Relevance first**: A search keeps the memories most relevant to your query and drops the rest, then ranks those on outcome, confidence and age. A memory that does not match your query is not returned, whatever its record.
 
 4. **Learning**: Each memory has a score starting at 0.0
    - "worked" → +0.2 (max 1.0)

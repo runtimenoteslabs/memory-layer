@@ -2,6 +2,66 @@
 
 All notable changes to Runtime Memory will be documented in this file.
 
+## [Unreleased] - 4.0.0
+
+Retrieval decides on relevance first, and an outcome has to name what it is
+about. Both changes come from four pre-registered Tier 2 evaluation runs; each is
+stated below with what it was measured against.
+
+### Changed
+
+- **Retrieval is two-stage by default.** `relevance_pool_factor` defaults to 2.0
+  instead of off: a search keeps the `ceil(limit x factor)` most relevant
+  candidates, drops those with no relevance, and ranks only those on the full
+  score. **A query that matches nothing now returns nothing** rather than
+  whatever scored best on the other signals.
+- **Frequency left the default score** (`frequency_weight` 0.15 to 0.0), and its
+  weight went to semantic (0.35 to 0.55). Frequency counts retrievals, which is
+  not evidence that a memory helped, and it compounds. One run found a memory
+  that failed every time it was used holding a top-8 place on it; another found
+  a correct memory that had taken no outcome falling out of retrieval while
+  memories that had taken one rose past it.
+- **Category boosts default to neutral.** They decided which memories were
+  injected in two runs: once seating a memory that ranked about 25th of 38 on
+  relevance at rank 1, once keeping the one memory that would have held a rule
+  out of all 45 prompts because its category was multiplied by 0.9. Pass
+  `category_boosts` to set your own.
+- **Recency decays from `created_at`,** a memory's age, rather than from
+  `updated_at`. `recency_from_created=False` restores the old reading.
+- **A retrieval no longer moves `updated_at`.** Reading a memory is not a change
+  to it, and while recency decayed from that field every retrieval made a memory
+  look newly written.
+- **`RuntimeMemoryProvider.record_outcome` requires memory ids.** A call without
+  them previously applied the outcome to every memory recalled in the turn. That
+  contract was measured in three Tier 2 runs and left the store worse than
+  recording nothing each time: a turn's verdict reached both the memory that
+  misled it and the memory that was right about the same thing, so both sank
+  together. A call with no ids is now declined, logged, and traced with origin
+  `declined`. The `runtimememory_outcome` tool says so, and lists `memory_ids`
+  as required.
+
+### Added
+
+- **`RetrievalConfig.legacy_3x()`**, the 3.x weights, category boosts,
+  single-stage scoring and recency reading, so evaluations run against 3.x stay
+  reproducible and callers who tuned for them can ask by name.
+- **`RetrievalConfig.recency_from_created`**, on by default.
+
+### Fixed
+
+- **README and USER_GUIDE described category routing that no search performs.**
+  `CategoryRouter` exists and is tested, but nothing calls it, so the documented
+  1.5x boost for troubleshooting memories on an error-shaped query never
+  happened. The docs now say what retrieval does.
+
+### Migration
+
+- Scoring changes for every caller. To keep 3.x behaviour, build the engine with
+  `RetrievalConfig.legacy_3x()`.
+- Callers of `record_outcome` that relied on the no-ids default must pass the ids
+  the outcome is about. The provider's recall results and the injected block both
+  carry them.
+
 ## [3.1.0] - 2026-09-17
 
 ### Added

@@ -37,10 +37,16 @@ class RetrievalConfig:
     # notes document, and they sum to 1.0. RetrievalSettings in core/config.py
     # carries the same numbers for settings-file configuration; a test asserts
     # the two agree, because they silently disagreed once.
-    semantic_weight: float = 0.35
+    # 4.0.0 changed these. Frequency left the default score: it rewards having
+    # been retrieved, which is not evidence of having helped, and the Tier 2
+    # evaluation caught it holding a failing memory in the top 8 through a whole
+    # sequence and starving a correct one that had taken no outcome. Its weight
+    # went to semantic, which is the only signal the query touches.
+    # RetrievalConfig.legacy_3x() restores the 3.x numbers and boosts.
+    semantic_weight: float = 0.55
     outcome_weight: float = 0.25
-    recency_weight: float = 0.15
-    frequency_weight: float = 0.15
+    recency_weight: float = 0.10
+    frequency_weight: float = 0.0
     confidence_weight: float = 0.10
 
     # BM25 parameters
@@ -53,6 +59,12 @@ class RetrievalConfig:
 
     # Recency decay parameters
     recency_half_life_days: float = 30.0  # Half-life for recency decay
+
+    # Which timestamp recency decays from. Since 4.0.0 it is the memory's age,
+    # from created_at. Before, it decayed from updated_at, which a retrieval and
+    # every recorded outcome moved, so the signal read "last touched" and a
+    # memory refreshed itself by being retrieved. False restores that.
+    recency_from_created: bool = True
 
     # Frequency boosting parameters
     frequency_log_base: float = 2.0  # Log base for frequency scaling
@@ -78,9 +90,14 @@ class RetrievalConfig:
     # other signals then choose among relevant memories rather than decide
     # whether an unrelated one gets in. At 1.0 they can only reorder; above it
     # they can replace a relevant memory that keeps failing with the next one.
-    relevance_pool_factor: float | None = None
+    # On by default since 4.0.0; None restores 3.x scoring.
+    relevance_pool_factor: float | None = 2.0
 
-    # Category boosting
+    # Category boosting. Empty means every category scores at 1.0, the default
+    # since 4.0.0. The 3.x boosts decided which memories were injected in two
+    # Tier 2 runs: once seating a wrong memory at rank 1 that ranked about 25th
+    # on relevance, once keeping the one memory that would have held a rule out
+    # of every prompt because its category was multiplied by 0.9.
     category_boosts: dict[MemoryCategory, float] = field(default_factory=dict)
 
     # Result settings
@@ -89,7 +106,7 @@ class RetrievalConfig:
     dedup_threshold: float = 0.95  # Similarity threshold for deduplication
 
     def __post_init__(self) -> None:
-        """Set default category boosts if not provided, and check the pool factor.
+        """Check the pool factor.
 
         Raises:
             ValueError: If ``relevance_pool_factor`` is below 1.0, which would make
@@ -99,18 +116,41 @@ class RetrievalConfig:
             raise ValueError(
                 f"relevance_pool_factor must be at least 1.0, got {self.relevance_pool_factor}"
             )
-        if not self.category_boosts:
-            self.category_boosts = {
-                MemoryCategory.GOTCHA: 1.3,  # Boost gotchas (important warnings)
-                MemoryCategory.TROUBLESHOOTING: 1.2,  # Boost troubleshooting
-                MemoryCategory.DECISION: 1.1,  # Slight boost for decisions
-                MemoryCategory.WORKAROUND: 1.1,  # Boost workarounds
+
+    @classmethod
+    def legacy_3x(cls, **overrides: Any) -> RetrievalConfig:
+        """The scoring 3.x shipped: five weighted signals, category boosts, no pool.
+
+        Kept so evaluations run against 3.x remain reproducible, and so a caller
+        who tuned for those numbers can ask for them by name.
+
+        Args:
+            **overrides: Any field to set instead of the 3.x value.
+
+        Returns:
+            A config scoring as 3.1.0 did.
+        """
+        defaults: dict[str, Any] = {
+            "semantic_weight": 0.35,
+            "outcome_weight": 0.25,
+            "recency_weight": 0.15,
+            "frequency_weight": 0.15,
+            "confidence_weight": 0.10,
+            "relevance_pool_factor": None,
+            "recency_from_created": False,
+            "category_boosts": {
+                MemoryCategory.GOTCHA: 1.3,
+                MemoryCategory.TROUBLESHOOTING: 1.2,
+                MemoryCategory.DECISION: 1.1,
+                MemoryCategory.WORKAROUND: 1.1,
                 MemoryCategory.PREFERENCE: 1.0,
                 MemoryCategory.PATTERN: 1.0,
                 MemoryCategory.ARCHITECTURE: 1.0,
                 MemoryCategory.CONVENTION: 0.9,
                 MemoryCategory.COMMAND: 0.9,
-            }
+            },
+        }
+        return cls(**{**defaults, **overrides})
 
     @classmethod
     def from_env(cls, **overrides: Any) -> RetrievalConfig:
@@ -629,7 +669,8 @@ class HybridRetriever:
     def _calculate_recency_score(self, memory: Memory) -> float:
         """Calculate recency score with exponential decay.
 
-        Uses half-life decay: score = 0.5 ^ (days_old / half_life)
+        Uses half-life decay: score = 0.5 ^ (days_old / half_life), from the
+        memory's creation unless ``recency_from_created`` is off.
 
         Args:
             memory: Memory to score.
@@ -638,7 +679,8 @@ class HybridRetriever:
             Recency score between 0 and 1.
         """
         now = datetime.now(UTC)
-        age = now - memory.updated_at
+        stamp = memory.created_at if self.config.recency_from_created else memory.updated_at
+        age = now - stamp
         days_old = age.total_seconds() / 86400  # Convert to days
 
         half_life = self.config.recency_half_life_days

@@ -82,8 +82,10 @@ OUTCOME = {
         "Report whether recalled memories actually helped. Call it once you "
         "know: 'worked' when the advice solved the problem, 'failed' when it "
         "was wrong or misleading, 'partial' when it helped a little. This is "
-        "what teaches the store which memories to surface next time. With no "
-        "memory_ids, it applies to the memories recalled for this turn."
+        "what teaches the store which memories to surface next time. Name the "
+        "memories it is about in memory_ids: an outcome with no ids is not "
+        "recorded, because a verdict spread over every memory recalled sinks the "
+        "ones that were right along with the one that misled you."
     ),
     "parameters": {
         "type": "object",
@@ -96,10 +98,13 @@ OUTCOME = {
             "memory_ids": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Specific memories to score. Defaults to this turn's recall.",
+                "description": (
+                    "The memories this outcome is about, by id, as shown with each "
+                    "recalled memory. Required: an outcome with none is declined."
+                ),
             },
         },
-        "required": ["outcome"],
+        "required": ["outcome", "memory_ids"],
     },
 }
 
@@ -203,9 +208,10 @@ def _outcome(provider: RuntimeMemoryProvider, args: dict[str, Any]) -> dict[str,
     memory_ids = args.get("memory_ids")
     updated = provider.record_outcome(outcome=outcome, memory_ids=memory_ids)
     if not updated:
+        # Unknown ids raise before this; the remaining case is a call with none.
         return {
             "recorded": False,
-            "reason": "No memories to score - none were recalled this turn.",
+            "reason": "Name the memories this outcome is about in memory_ids.",
         }
     return {
         "recorded": True,

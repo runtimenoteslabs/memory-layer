@@ -827,12 +827,15 @@ class MemoryStorage:
         Returns:
             Updated memory.
         """
+        # Since 4.0.0 a retrieval does not move updated_at. Reading a memory is
+        # not a change to it, and while recency decayed from updated_at every
+        # retrieval made a memory look newly written.
         sql = """
             UPDATE memories
-            SET use_count = use_count + 1, updated_at = ?
+            SET use_count = use_count + 1
             WHERE id = ?
         """
-        params = (datetime.now(UTC).isoformat(), memory_id)
+        params = (memory_id,)
 
         if conn:
             await conn.execute(sql, params)
