@@ -25,7 +25,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from runtime_memory.core.logging import get_logger
-from runtime_memory.core.models import Memory, MemoryCategory, MemorySource
+from runtime_memory.core.models import Memory, MemoryCategory, MemorySource, RelationType
 
 if TYPE_CHECKING:
     from runtime_memory.core.engine import MemoryEngine
@@ -63,7 +63,7 @@ EXTRACTION_USER_PROMPT = """Extract actionable memories from this conversation t
 <transcript>
 {transcript}
 </transcript>
-
+{stored_section}
 Return a JSON object with this exact structure:
 {{
   "memories": [
@@ -74,9 +74,12 @@ Return a JSON object with this exact structure:
       "confidence": 0.0 to 1.0 (how certain are we this is correct),
       "entities": ["list", "of", "relevant", "entities"],
       "tags": ["optional", "tags"],
-      "rationale": "Brief explanation of why this is worth remembering"
+      "rationale": "Brief explanation of why this is worth remembering",
+      "relates_to": "handle of a stored memory this one updates, conflicts with or extends, or null",
+      "relation": "updates, conflicts or extends, or null"
     }}
   ],
+  "confirmed": ["handles of stored memories this conversation confirmed without adding to them"],
   "summary": "One sentence summary of the conversation"
 }}
 
@@ -85,8 +88,22 @@ Guidelines:
 - confidence: 0.9+ if explicitly stated and verified, 0.6-0.8 if implied, 0.3-0.5 if inferred
 - entities: Include file names, function names, package names, error types
 - Each memory should be self-contained and understandable without context
+- relates_to, relation and confirmed refer to stored memories listed above; leave them null or empty when none are listed
 
 Return ONLY the JSON object, no other text."""
+
+STORED_MEMORIES_SECTION = """
+These memories are already stored for this project, each with a handle:
+
+<stored>
+{stored}
+</stored>
+
+- Do not extract anything a stored memory already says, even in other words.
+- If the conversation shows a stored memory is wrong or out of date, extract the correct version, set "relates_to" to that memory's handle, and set "relation" to "updates" if the new memory should replace it, or "conflicts" if the two contradict and the conversation does not settle which is right.
+- If a new memory adds to a stored one without contradicting it, set "relates_to" to its handle and "relation" to "extends".
+- If the conversation confirms a stored memory without adding anything, do not extract it again; put its handle in "confirmed".
+"""
 
 CONFLICT_DETECTION_PROMPT = """Compare these two memories and determine their relationship.
 
@@ -228,6 +245,14 @@ class ExtractedMemory:
     rationale: str = ""
     """Why this memory is worth remembering."""
 
+    relates_to: str | None = None
+    """Handle of the stored memory this one updates, conflicts with or extends,
+    as the extraction call named it. Only meaningful against the stored memories
+    that call was shown."""
+
+    relation: str | None = None
+    """``updates``, ``conflicts`` or ``extends``, with ``relates_to``."""
+
     def to_memory(self, project: str | None = None) -> Memory:
         """Convert to Memory dataclass.
 
@@ -248,6 +273,14 @@ class ExtractedMemory:
             project=project,
             metadata={"rationale": self.rationale} if self.rationale else {},
         )
+
+
+RELATION_OF_CONFLICT: dict[ConflictRelationship, RelationType] = {
+    ConflictRelationship.UPDATES: RelationType.UPDATES,
+    ConflictRelationship.EXTENDS: RelationType.EXTENDS,
+    ConflictRelationship.CONFLICTS: RelationType.CONFLICTS_WITH,
+}
+"""How the extractor's labels are stored. ``unrelated`` is not a relationship."""
 
 
 @dataclass
@@ -292,6 +325,10 @@ class ExtractionResult:
 
     conflicts: list[ConflictResult] = field(default_factory=list)
     """Detected conflicts with existing memories."""
+
+    confirmed_ids: list[str] = field(default_factory=list)
+    """Stored memories the conversation confirmed without adding to, which were
+    therefore not extracted again."""
 
     pii_removed: int = 0
     """Number of PII instances removed."""
@@ -375,6 +412,22 @@ class ExtractionConfig:
 
     conflict_similarity_threshold: float = 0.7
     """Similarity threshold for potential conflicts."""
+
+    stored_context_limit: int = 50
+    """How many stored memories the extraction call is shown. 0 turns it off.
+
+    The call is told not to extract what a stored memory already says, to name
+    the stored memory a new one updates, conflicts with or extends, and to list
+    the ones the conversation confirmed. That is dedup and conflict detection in
+    the one call extraction already makes. Before, nothing stopped a session
+    from storing a rule again in new words, and a store could hold five copies
+    of each rule; and conflicts were found by one classifier call per candidate
+    pair, among same-category memories sharing words, so restatements filed
+    under another category were never compared. With this off, that pairwise
+    classifier runs as before.
+
+    A project with more stored memories than this shows the ones most relevant
+    to the transcript."""
 
 
 # =============================================================================
@@ -725,7 +778,15 @@ class MemoryExtractor:
             messages=[{"role": "user", "content": user_prompt}],
         )
 
-        return response.content[0].text
+        if response.stop_reason == "refusal":
+            raise ValueError("The model declined the request")
+        if response.stop_reason == "max_tokens":
+            logger.warning(
+                f"Response hit max_tokens ({self.config.max_tokens}); its JSON may be cut off"
+            )
+        # Claude 5 models think by default, so the answer is not always the first
+        # block: reading content[0] failed whenever a thinking block came first.
+        return "".join(block.text for block in response.content if block.type == "text")
 
     def _parse_extraction_response(self, response: str) -> tuple[list[ExtractedMemory], str]:
         """Parse LLM extraction response.
@@ -781,6 +842,11 @@ class MemoryExtractor:
 
             rationale = str(raw.get("rationale", "")).strip()
 
+            # Checked against the stored memories later; null, blank or a type
+            # that is not a string all mean "none".
+            relates_to = raw.get("relates_to")
+            relation = raw.get("relation")
+
             memories.append(ExtractedMemory(
                 content=content,
                 category=category,
@@ -789,23 +855,129 @@ class MemoryExtractor:
                 entities=entities,
                 tags=tags,
                 rationale=rationale,
+                relates_to=relates_to.strip() if isinstance(relates_to, str) and relates_to.strip() else None,
+                relation=relation.strip().lower() if isinstance(relation, str) and relation.strip() else None,
             ))
 
         summary = str(data.get("summary", "")).strip()
         return memories, summary
+
+    async def _relations(
+        self,
+        memories: list[ExtractedMemory],
+        response: str,
+        handles: dict[str, Memory],
+        existing_memories: list[Memory] | None,
+    ) -> tuple[list[ConflictResult], list[str]]:
+        """How the new memories relate to stored ones, and which were confirmed.
+
+        Named by the extraction call itself when it was shown stored memories,
+        found by the pairwise classifier otherwise, which confirms nothing.
+
+        Args:
+            memories: The extracted memories, in the order they will be stored.
+            response: The extraction call's raw response.
+            handles: The stored memories the call was shown, by handle.
+            existing_memories: What the pairwise classifier compares against.
+
+        Returns:
+            The conflict results and the confirmed memory ids.
+        """
+        if handles:
+            return self._relations_named(memories, handles), self._confirmed_ids(response, handles)
+        if self.config.enable_conflict_detection and existing_memories:
+            return await self._detect_conflicts(memories, existing_memories), []
+        return [], []
+
+    @staticmethod
+    def _confirmed_ids(response: str, handles: dict[str, Memory]) -> list[str]:
+        """The stored memories an extraction response listed as confirmed.
+
+        Args:
+            response: Raw LLM response, already known to hold valid JSON.
+            handles: The stored memories the call was shown, by handle.
+
+        Returns:
+            Their ids, once each, in the order listed. Handles that were not
+            shown, and a missing or malformed field, give nothing.
+        """
+        json_match = re.search(r'\{[\s\S]*\}', response)
+        confirmed = json.loads(json_match.group()).get("confirmed", []) if json_match else []
+        if not isinstance(confirmed, list):
+            return []
+        shown = (handles.get(str(handle).strip()) for handle in confirmed)
+        return list(dict.fromkeys(memory.id for memory in shown if memory is not None))
+
+    def _stored_section(self, handles: dict[str, Memory]) -> str:
+        """Render the stored memories an extraction call is shown, by handle."""
+        if not handles:
+            return ""
+        lines = "\n".join(
+            f"[{handle}] ({memory.category.value}) {self.sanitize_for_prompt(memory.content)}"
+            for handle, memory in handles.items()
+        )
+        return STORED_MEMORIES_SECTION.format(stored=lines)
+
+    @staticmethod
+    def _relations_named(
+        memories: list[ExtractedMemory], handles: dict[str, Memory]
+    ) -> list[ConflictResult]:
+        """Turn the relations an extraction call named into conflict results.
+
+        A handle that was not shown, or a relation other than updates, conflicts
+        or extends, is dropped and logged: it cannot be tied to a stored memory.
+
+        Args:
+            memories: The extracted memories, in the order they will be stored.
+            handles: The stored memories the call was shown, by handle.
+
+        Returns:
+            One result per usable relation, carrying the new memory's position.
+        """
+        named: list[ConflictResult] = []
+        allowed = {
+            ConflictRelationship.UPDATES.value,
+            ConflictRelationship.CONFLICTS.value,
+            ConflictRelationship.EXTENDS.value,
+        }
+        for index, memory in enumerate(memories):
+            if memory.relates_to is None and memory.relation is None:
+                continue
+            stored = handles.get(memory.relates_to or "")
+            if stored is None or memory.relation not in allowed:
+                logger.warning(
+                    f"Extraction named relation {memory.relation!r} to "
+                    f"{memory.relates_to!r}, which matches no stored memory shown; ignored"
+                )
+                continue
+            relationship = ConflictRelationship(memory.relation)
+            named.append(ConflictResult(
+                existing_id=stored.id,
+                relationship=relationship,
+                confidence=memory.confidence,
+                explanation="named by the extraction call",
+                should_supersede=relationship == ConflictRelationship.UPDATES,
+                new_index=index,
+            ))
+        return named
 
     async def extract_from_transcript(
         self,
         transcript: str,
         project: str | None = None,
         existing_memories: list[Memory] | None = None,
+        stored_memories: list[Memory] | None = None,
     ) -> ExtractionResult:
         """Extract memories from a conversation transcript.
 
         Args:
             transcript: The conversation transcript.
             project: Optional project context.
-            existing_memories: Optional list of existing memories for conflict detection.
+            existing_memories: Memories for the pairwise conflict classifier, which
+                runs only when ``stored_memories`` is not given.
+            stored_memories: Memories to show the extraction call, so it leaves
+                out what they already say and names what it updates, conflicts
+                with, extends or confirms. See ``stored_context_limit``.
 
         Returns:
             ExtractionResult with extracted memories.
@@ -846,9 +1018,14 @@ class MemoryExtractor:
         # Sanitize transcript for prompt
         transcript = self.sanitize_for_prompt(transcript)
 
-        # Build prompt
-        user_prompt = EXTRACTION_USER_PROMPT.format(transcript=transcript)
-        estimated_tokens = len(transcript) // 4 + 1000
+        # Build prompt. Short handles, not ids, stand for the stored memories:
+        # fewer tokens, and nothing for the model to miscopy.
+        handles = {f"S{i}": memory for i, memory in enumerate(stored_memories or [], start=1)}
+        stored_section = self._stored_section(handles)
+        user_prompt = EXTRACTION_USER_PROMPT.format(
+            transcript=transcript, stored_section=stored_section
+        )
+        estimated_tokens = (len(transcript) + len(stored_section)) // 4 + 1000
 
         try:
             # Call LLM
@@ -877,10 +1054,9 @@ class MemoryExtractor:
                         if entity not in existing_entities:
                             memory.entities.append(entity)
 
-            # Conflict detection
-            conflicts: list[ConflictResult] = []
-            if self.config.enable_conflict_detection and existing_memories:
-                conflicts = await self._detect_conflicts(memories, existing_memories)
+            conflicts, confirmed_ids = await self._relations(
+                memories, response, handles, existing_memories
+            )
 
             extraction_time = (time.time() - start_time) * 1000
 
@@ -890,6 +1066,7 @@ class MemoryExtractor:
                 transcript_length=transcript_length,
                 extraction_time_ms=extraction_time,
                 conflicts=conflicts,
+                confirmed_ids=confirmed_ids,
                 pii_removed=pii_removed,
                 injection_attempts=injection_attempts,
                 raw_response=response,
@@ -1028,6 +1205,37 @@ class MemoryExtractor:
     # High-Level API
     # =========================================================================
 
+    STORED_CONTEXT_QUERY_CHARS: ClassVar[int] = 20000
+    """How much of a transcript ranks stored memories when a project has more
+    than the call can be shown. BM25 tokenises the query once per memory."""
+
+    async def _stored_context(
+        self, engine: MemoryEngine, transcript: str, project: str | None
+    ) -> list[Memory]:
+        """Choose the stored memories an extraction call is shown.
+
+        All of the project's live memories when they fit in
+        ``stored_context_limit``, otherwise the ones most relevant to the
+        transcript. Ranked through the retriever directly, so choosing them
+        neither counts as a use nor becomes the engine's last search.
+
+        Args:
+            engine: The engine the memories are stored in.
+            transcript: The conversation about to be extracted.
+            project: Its project.
+
+        Returns:
+            Up to ``stored_context_limit`` memories.
+        """
+        limit = self.config.stored_context_limit
+        memories = await engine.list(project=project, limit=limit + 1)
+        if len(memories) <= limit:
+            return memories
+        hits = await engine.retriever.search(
+            query=transcript[: self.STORED_CONTEXT_QUERY_CHARS], limit=limit, project=project
+        )
+        return [hit.memory for hit in hits]
+
     async def extract_and_store(
         self,
         transcript: str,
@@ -1044,9 +1252,13 @@ class MemoryExtractor:
         Returns:
             ExtractionResult with stored memories.
         """
-        # Get existing memories for conflict detection
+        # What the call is shown, or failing that what the pairwise classifier
+        # compares against.
+        stored: list[Memory] = []
         existing_memories: list[Memory] = []
-        if self.config.enable_conflict_detection:
+        if self.config.stored_context_limit > 0:
+            stored = await self._stored_context(engine, transcript, project)
+        elif self.config.enable_conflict_detection:
             existing_memories = await engine.list(project=project, limit=100)
 
         # Extract
@@ -1054,9 +1266,16 @@ class MemoryExtractor:
             transcript=transcript,
             project=project,
             existing_memories=existing_memories,
+            stored_memories=stored or None,
         )
 
-        if not result.success or not result.memories:
+        if not result.success:
+            return result
+
+        for memory_id in result.confirmed_ids:
+            await engine.confirm(memory_id)
+
+        if not result.memories:
             return result
 
         # Handle conflicts and store
@@ -1076,7 +1295,7 @@ class MemoryExtractor:
             )
 
             # Store the memory
-            await engine.add(
+            stored = await engine.add(
                 content=memory.content,
                 category=memory.category,
                 project=project,
@@ -1088,6 +1307,23 @@ class MemoryExtractor:
                 supersedes=supersedes_id,
                 metadata={"rationale": memory.rationale} if memory.rationale else {},
             )
+
+            # Keep what the classifier found. Before, everything but a supersede
+            # was discarded, so a memory that contradicted a stored one was left
+            # to be out-ranked by it, and nothing could tell the two apart later.
+            for conflict in result.conflicts:
+                if conflict.new_index != index:
+                    continue
+                relation = RELATION_OF_CONFLICT.get(conflict.relationship)
+                if relation is None:
+                    continue
+                await engine.link(
+                    stored.id,
+                    conflict.existing_id,
+                    relation,
+                    strength=conflict.confidence,
+                    metadata={"source": "extraction", "explanation": conflict.explanation},
+                )
 
         logger.info(f"Stored {len(result.memories)} memories from extraction")
         return result

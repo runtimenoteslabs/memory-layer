@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from runtime_memory.core.models import Memory, MemoryCategory, MemorySource
+from runtime_memory.core.engine import EngineConfig, MemoryEngine
+from runtime_memory.core.models import Memory, MemoryCategory, MemorySource, RelationType
 from runtime_memory.extraction.extractor import (
     ENTITY_PATTERNS,
     EXTRACTION_SYSTEM_PROMPT,
@@ -588,7 +589,7 @@ class TestExtractionWithMockLLM:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.content = [
-            MagicMock(text=json.dumps({
+            MagicMock(type="text", text=json.dumps({
                 "memories": [
                     {
                         "content": "Use async/await for I/O operations",
@@ -674,7 +675,7 @@ class TestExtractionWithMockLLM:
         # Mock response with low confidence memory
         mock_response = MagicMock()
         mock_response.content = [
-            MagicMock(text=json.dumps({
+            MagicMock(type="text", text=json.dumps({
                 "memories": [
                     {
                         "content": "Low confidence",
@@ -728,6 +729,11 @@ class TestConflictResult:
         assert conflict.new_index is None
 
 
+def _stored(memory_id: str) -> Memory:
+    """What engine.add gives back: the memory as stored, with its id."""
+    return Memory(id=memory_id, content="c", category=MemoryCategory.COMMAND)
+
+
 def _updates(existing_id: str, new_index: int | None) -> ConflictResult:
     return ConflictResult(
         existing_id=existing_id,
@@ -777,12 +783,16 @@ class TestSupersedeAttribution:
         )
         engine = MagicMock()
         engine.list = AsyncMock(return_value=[])
-        engine.add = AsyncMock()
+        engine.add = AsyncMock(side_effect=[_stored("new-0"), _stored("new-1")])
+        engine.link = AsyncMock()
 
         await extractor.extract_and_store("transcript", engine, project="p")
 
         supersedes = [call.kwargs["supersedes"] for call in engine.add.await_args_list]
         assert supersedes == [None, "old"]
+        # The classifier's finding is kept, from the memory it was found for.
+        (link,) = engine.link.await_args_list
+        assert link.args == ("new-1", "old", RelationType.UPDATES)
 
     @pytest.mark.asyncio
     async def test_conflict_without_position_supersedes_nothing(self) -> None:
@@ -799,11 +809,13 @@ class TestSupersedeAttribution:
         )
         engine = MagicMock()
         engine.list = AsyncMock(return_value=[])
-        engine.add = AsyncMock()
+        engine.add = AsyncMock(return_value=_stored("new-0"))
+        engine.link = AsyncMock()
 
         await extractor.extract_and_store("transcript", engine, project="p")
 
         assert engine.add.await_args.kwargs["supersedes"] is None
+        assert engine.link.await_args_list == []
 
 
 class TestConflictRelationship:
@@ -906,3 +918,191 @@ class TestPromptTemplates:
         # Should mention not including personal information
         assert "personal" in EXTRACTION_SYSTEM_PROMPT.lower() or \
                "api key" in EXTRACTION_SYSTEM_PROMPT.lower()
+
+
+def _client_answering(payload: dict) -> MagicMock:
+    """An Anthropic client whose every call answers with this JSON."""
+    client = MagicMock()
+    response = MagicMock()
+    response.content = [MagicMock(type="text", text=json.dumps(payload))]
+    response.stop_reason = "end_turn"
+    client.messages.create = AsyncMock(return_value=response)
+    return client
+
+
+TRANSCRIPT = "user: how do we install deps?\nassistant: with uv, since pip broke the lockfile. " * 3
+
+
+def _memory(content: str, category: str = "command", **extra: object) -> dict:
+    return {"content": content, "category": category, "importance": 0.8, "confidence": 0.9, **extra}
+
+
+class TestStoredContext:
+    """The extraction call is shown what is stored, and names what it relates to."""
+
+    STORED = (
+        Memory(id="m-pip", content="Install dependencies with pip", category=MemoryCategory.COMMAND),
+        Memory(id="m-ci", content="CI runs on every push", category=MemoryCategory.CONVENTION),
+    )
+
+    async def _extract(self, payload: dict, **kwargs: object) -> tuple[ExtractionResult, MagicMock]:
+        extractor = MemoryExtractor()
+        extractor._client = _client_answering(payload)
+        extractor._classify_conflict = AsyncMock()
+        result = await extractor.extract_from_transcript(TRANSCRIPT, project="p", **kwargs)
+        return result, extractor
+
+    async def test_the_prompt_lists_stored_memories_by_handle(self) -> None:
+        _, extractor = await self._extract({"memories": [], "summary": ""}, stored_memories=list(self.STORED))
+
+        prompt = extractor._client.messages.create.await_args.kwargs["messages"][0]["content"]
+        assert "[S1] (command) Install dependencies with pip" in prompt
+        assert "[S2] (convention) CI runs on every push" in prompt
+        assert "m-pip" not in prompt
+
+    async def test_without_stored_memories_the_prompt_has_no_stored_block(self) -> None:
+        _, extractor = await self._extract({"memories": [], "summary": ""})
+
+        prompt = extractor._client.messages.create.await_args.kwargs["messages"][0]["content"]
+        assert "<stored>" not in prompt
+
+    async def test_a_named_relation_is_tied_to_the_stored_memory(self) -> None:
+        result, extractor = await self._extract(
+            {"memories": [
+                _memory("Run the tests with make test", "command"),
+                _memory("Install dependencies with uv", relates_to="S1", relation="updates"),
+            ], "summary": ""},
+            stored_memories=list(self.STORED),
+        )
+
+        (conflict,) = result.conflicts
+        assert conflict.existing_id == "m-pip"
+        assert conflict.relationship == ConflictRelationship.UPDATES
+        assert conflict.should_supersede is True
+        assert conflict.new_index == 1
+        extractor._classify_conflict.assert_not_awaited()
+
+    async def test_a_contradiction_does_not_supersede(self) -> None:
+        result, _ = await self._extract(
+            {"memories": [_memory("Install with uv", relates_to="S1", relation="conflicts")], "summary": ""},
+            stored_memories=list(self.STORED),
+        )
+
+        (conflict,) = result.conflicts
+        assert conflict.relationship == ConflictRelationship.CONFLICTS
+        assert conflict.should_supersede is False
+
+    @pytest.mark.parametrize(("handle", "relation"), [("S9", "updates"), ("S1", "replaces"), (None, "updates")])
+    async def test_a_relation_that_matches_nothing_shown_is_dropped(
+        self, handle: str | None, relation: str
+    ) -> None:
+        result, _ = await self._extract(
+            {"memories": [_memory("Install with uv", relates_to=handle, relation=relation)], "summary": ""},
+            stored_memories=list(self.STORED),
+        )
+
+        assert result.memory_count == 1
+        assert result.conflicts == []
+
+    async def test_confirmed_handles_become_memory_ids(self) -> None:
+        result, _ = await self._extract(
+            {"memories": [], "confirmed": ["S2", "S2", "S7"], "summary": ""},
+            stored_memories=list(self.STORED),
+        )
+
+        assert result.confirmed_ids == ["m-ci"]
+
+    async def test_extract_and_store_links_and_confirms(self, temp_db_path) -> None:
+        """End to end on a real store: the relation is kept, the confirmation counted."""
+        engine = MemoryEngine(config=EngineConfig(
+            db_path=temp_db_path, secure_permissions=False, embedding_provider="mock"
+        ))
+        await engine.initialize()
+        try:
+            pip = await engine.add(content="Install dependencies with pip", category=MemoryCategory.COMMAND, project="p")
+            ci = await engine.add(content="CI runs on every push", category=MemoryCategory.CONVENTION, project="p")
+            extractor = MemoryExtractor()
+            # The store lists newest first, so the handles are S1 = ci, S2 = pip.
+            extractor._client = _client_answering({
+                "memories": [_memory("Install dependencies with uv", relates_to="S2", relation="conflicts")],
+                "confirmed": ["S1"],
+                "summary": "",
+            })
+
+            result = await extractor.extract_and_store(TRANSCRIPT, engine, project="p")
+
+            prompt = extractor._client.messages.create.await_args.kwargs["messages"][0]["content"]
+            assert "[S1] (convention) CI runs on every push" in prompt
+            assert result.memory_count == 1
+            (link,) = await engine.related(pip.id)
+            assert link.relation_type == RelationType.CONFLICTS_WITH
+            assert (await engine.get(ci.id)).metadata["confirmations"] == 1
+            assert not (await engine.get(pip.id)).archived
+        finally:
+            await engine.close()
+
+    async def test_a_large_store_shows_the_most_relevant(self, temp_db_path) -> None:
+        engine = MemoryEngine(config=EngineConfig(
+            db_path=temp_db_path, secure_permissions=False, embedding_provider="mock"
+        ))
+        await engine.initialize()
+        try:
+            for content in ("Deploy on Fridays", "Install dependencies with pip", "Lint with ruff"):
+                await engine.add(content=content, category=MemoryCategory.COMMAND, project="p")
+            extractor = MemoryExtractor(config=ExtractionConfig(stored_context_limit=1))
+
+            shown = await extractor._stored_context(engine, "we install dependencies with uv now", "p")
+
+            assert [m.content for m in shown] == ["Install dependencies with pip"]
+        finally:
+            await engine.close()
+
+    async def test_limit_zero_falls_back_to_the_pairwise_classifier(self) -> None:
+        extractor = MemoryExtractor(config=ExtractionConfig(stored_context_limit=0))
+        extractor.extract_from_transcript = AsyncMock(return_value=ExtractionResult(
+            memories=[], summary="", transcript_length=0, extraction_time_ms=0.0,
+        ))
+        engine = MagicMock()
+        engine.list = AsyncMock(return_value=list(self.STORED))
+
+        await extractor.extract_and_store(TRANSCRIPT, engine, project="p")
+
+        kwargs = extractor.extract_from_transcript.await_args.kwargs
+        assert kwargs["stored_memories"] is None
+        assert kwargs["existing_memories"] == list(self.STORED)
+
+
+class TestResponseBlocks:
+    """The answer is read from text blocks, wherever they sit."""
+
+    async def test_a_thinking_block_first_is_skipped(self) -> None:
+        """Claude 5 models think by default; the answer then comes second."""
+        client = MagicMock()
+        response = MagicMock()
+        response.stop_reason = "end_turn"
+        response.content = [
+            MagicMock(type="thinking", thinking=""),
+            MagicMock(type="text", text=json.dumps({"memories": [_memory("Use uv")], "summary": "s"})),
+        ]
+        client.messages.create = AsyncMock(return_value=response)
+        extractor = MemoryExtractor()
+        extractor._client = client
+
+        result = await extractor.extract_from_transcript(TRANSCRIPT, project="p")
+
+        assert result.success
+        assert [m.content for m in result.memories] == ["Use uv"]
+
+    async def test_a_refusal_is_a_failed_extraction(self) -> None:
+        client = MagicMock()
+        response = MagicMock()
+        response.stop_reason = "refusal"
+        response.content = []
+        client.messages.create = AsyncMock(return_value=response)
+        extractor = MemoryExtractor()
+        extractor._client = client
+
+        result = await extractor.extract_from_transcript(TRANSCRIPT, project="p")
+
+        assert not result.success
+        assert "declined" in result.error

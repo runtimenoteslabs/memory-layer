@@ -18,6 +18,7 @@ from runtime_memory.core.models import (
     MemoryScope,
     MemorySource,
     Outcome,
+    RelationType,
 )
 
 
@@ -417,3 +418,92 @@ class TestEngineRestart:
         assert retrieved.outcome_score == 0.2
 
         await engine2.close()
+
+
+class TestRelationsAndCounterpartCredit:
+    """Conflicts are stored, and a failure credits what the failed memory contradicts.
+
+    A contract that credits only what was acted on leaves the memory that was right
+    about the same thing with nothing. The Tier 2 evaluation watched a correct memory
+    fall out of retrieval that way, after which its rule broke on 8 of the next 10
+    tasks.
+    """
+
+    async def _pair(self, engine: MemoryEngine) -> tuple[Memory, Memory]:
+        wrong = await engine.add("Amounts can be floats", MemoryCategory.CONVENTION)
+        right = await engine.add("Amounts are Decimal", MemoryCategory.CONVENTION)
+        await engine.link(wrong.id, right.id, RelationType.CONFLICTS_WITH)
+        return wrong, right
+
+    async def test_a_conflict_is_stored_and_readable_from_either_side(
+        self, engine: MemoryEngine
+    ) -> None:
+        wrong, right = await self._pair(engine)
+
+        from_wrong = await engine.related(wrong.id, RelationType.CONFLICTS_WITH)
+        from_right = await engine.related(right.id, RelationType.CONFLICTS_WITH)
+
+        assert [link.target_id for link in from_wrong] == [right.id]
+        assert [link.source_id for link in from_right] == [wrong.id]
+
+    async def test_failure_credits_the_memory_it_conflicts_with(
+        self, engine: MemoryEngine
+    ) -> None:
+        wrong, right = await self._pair(engine)
+
+        await engine.record_outcome([wrong.id], Outcome.FAILED)
+
+        assert (await engine.get(wrong.id)).outcome_score == pytest.approx(-0.3)
+        assert (await engine.get(right.id)).outcome_score == pytest.approx(0.05)
+
+    async def test_success_credits_nothing(self, engine: MemoryEngine) -> None:
+        """A memory that worked says nothing about what contradicts it."""
+        wrong, right = await self._pair(engine)
+
+        await engine.record_outcome([wrong.id], Outcome.WORKED)
+
+        assert (await engine.get(right.id)).outcome_score == 0.0
+
+    async def test_a_memory_named_in_the_same_call_is_not_credited(
+        self, engine: MemoryEngine
+    ) -> None:
+        """Both sides failing means both failed; neither is the counterpart."""
+        wrong, right = await self._pair(engine)
+
+        await engine.record_outcome([wrong.id, right.id], Outcome.FAILED)
+
+        assert (await engine.get(right.id)).outcome_score == pytest.approx(-0.3)
+
+    async def test_the_credit_can_be_turned_off(self, temp_db_path: Path) -> None:
+        eng = MemoryEngine(
+            config=EngineConfig(
+                db_path=temp_db_path,
+                secure_permissions=False,
+                embedding_provider="mock",
+                counterpart_credit=0.0,
+            )
+        )
+        await eng.initialize()
+        try:
+            wrong, right = await self._pair(eng)
+            await eng.record_outcome([wrong.id], Outcome.FAILED)
+            assert (await eng.get(right.id)).outcome_score == 0.0
+        finally:
+            await eng.close()
+
+    async def test_only_conflicts_are_credited(self, engine: MemoryEngine) -> None:
+        """An extends or updates link is not evidence about the other memory."""
+        failed = await engine.add("Use uv", MemoryCategory.COMMAND)
+        extended = await engine.add("Use uv with a lockfile", MemoryCategory.COMMAND)
+        await engine.link(failed.id, extended.id, RelationType.EXTENDS)
+
+        await engine.record_outcome([failed.id], Outcome.FAILED)
+
+        assert (await engine.get(extended.id)).outcome_score == 0.0
+
+    async def test_a_hard_delete_takes_its_relations(self, engine: MemoryEngine) -> None:
+        wrong, right = await self._pair(engine)
+
+        await engine.delete(wrong.id, hard_delete=True)
+
+        assert await engine.related(right.id) == []

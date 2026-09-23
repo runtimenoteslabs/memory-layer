@@ -41,8 +41,11 @@ add the embedding extra:
     'runtime-memory[embedding]'
 ```
 
-Without the extra, retrieval uses only the BM25 half of the hybrid. With it, the
-embedding model loads at startup rather than during your first turn.
+Without the extra, retrieval uses only the BM25 half of the hybrid, and the
+provider logs a warning at startup naming the interpreter to install into. With
+it, the embedding model loads at startup rather than during your first turn. The
+startup line reports which you got, `search=hybrid` or `search=keyword`, and so
+does every recall in the evaluation trace.
 
 If the Hermes environment already holds memories embedded by a different model,
 keep using that model. Mixing embedding models in one store leaves the older
@@ -59,26 +62,27 @@ beyond the provider name.
 | `RUNTIME_MEMORY_EMBEDDING` | `local` | `local`, `null`, `mock`, `openai`, `voyage` |
 | `RUNTIME_MEMORY_RECALL_LIMIT` | `8` | Memories injected per turn |
 | `RUNTIME_MEMORY_MIN_SCORE` | `0.0` | Floor on the combined score for injection |
-| `RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR` | unset | Two-stage recall, see below |
+| `RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR` | `2` | Two-stage recall, see below |
 | `RUNTIME_MEMORY_PROJECT` | workspace name | Project scope for memories |
 | `RUNTIME_MEMORY_MIRROR_WRITES` | `true` | Mirror built-in memory writes |
 | `RUNTIME_MEMORY_EXTRACT_ON_END` | `false` | Extract memories at session end |
 | `RUNTIME_MEMORY_HERMES_TRACE` | unset | Path for the evaluation trace |
 
-By default every memory competes on one combined score, and only its semantic
-part depends on the message, so a gotcha that is often recalled and has worked
-before can take a slot from a memory that matches the message far better.
-Setting `RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR` splits recall in two: the
-`recall_limit x factor` memories most relevant to the message form a pool, a
-memory with no relevance at all never enters it, and only the pool competes on
-the combined score. At `1` the other signals can only reorder what relevance
-picked; at `2` they can replace up to every slot with the next most relevant
-memory, which is what lets a memory that keeps failing drop out.
+Recall runs in two stages. The `recall_limit x factor` memories most relevant to
+the message form a pool, a memory with no relevance at all never enters it, and
+only the pool competes on the combined score. At `1` the other signals can only
+reorder what relevance picked; at the default `2` they can replace up to every
+slot with the next most relevant memory, which is what lets a memory that keeps
+failing drop out. Set `off` to let every memory compete on the combined score,
+as 3.x did. Only the semantic part of that score depends on the message, so a
+memory that has worked before can then take a slot from one that matches the
+message far better.
 
 `local` degrades on its own: without `sentence-transformers` it indexes no
-vectors and retrieval scores on keywords alone. Set `null` to force that even
-when the model is installed. Avoid `mock` against a shared store, since its
-hash-derived vectors are meaningless next to real ones.
+vectors and retrieval scores on keywords alone. Set `null` to choose that even
+when the model is installed, which also silences the startup warning. Avoid
+`mock` against a shared store, since its hash-derived vectors are meaningless
+next to real ones.
 
 The store sits outside `HERMES_HOME` so that Claude Code and MCP clients can
 share it. The provider reports its path through `backup_paths()`, so

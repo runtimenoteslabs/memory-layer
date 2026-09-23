@@ -28,6 +28,21 @@ stated below with what it was measured against.
   `category_boosts` to set your own.
 - **Recency decays from `created_at`,** a memory's age, rather than from
   `updated_at`. `recency_from_created=False` restores the old reading.
+- **The semantic score is scaled relative to the query's best match**
+  (`RetrievalConfig.semantic_scaling`, `relative` by default, `fixed` for 3.x).
+  BM25 is divided by the highest BM25 among the candidates, and cosine, clipped
+  at zero, by the highest cosine, so the best match scores 1.0 and no match
+  still scores 0.0. Under the 3.x scaling, BM25 / (BM25 + 1) and
+  (cos + 1) / 2, a task-length query gives raw BM25 in the tens for most
+  memories, so the keyword part sat near 1 for all of them. Without an
+  embedding backend the top candidates' semantic scores then spanned a few
+  hundredths, less than the confidence weight moves a memory, so the
+  extractor's self-reported confidence decided their order rather than
+  relevance. The order by semantic score alone is unchanged, and on a
+  stratified 120-question sample of LongMemEval-S recall@10 of the evidence
+  sessions went from 0.982 to 0.988; what changes is how much relevance counts
+  against the other signals. `min_vector_similarity` applies to fixed scaling
+  only.
 - **A retrieval no longer moves `updated_at`.** Reading a memory is not a change
   to it, and while recency decayed from that field every retrieval made a memory
   look newly written.
@@ -42,10 +57,55 @@ stated below with what it was measured against.
 
 ### Added
 
+- **Memories can record how they relate to each other** (schema 2, migrated on
+  open). `MemoryEngine.link()` stores a `Relationship` and `related()` reads
+  them from either side, since a conflict has no direction. Extraction already
+  classified new memories against stored ones and kept only the supersede; it
+  now stores what it found, so a memory that contradicts another is marked as
+  such instead of being left to be out-ranked.
+- **`EngineConfig.counterpart_credit`**, 0.05 by default, 0.0 to turn off. When
+  a memory is recorded as having failed, the memories it conflicts with gain
+  that much. A contract that credits only what was acted on leaves the memory
+  that was right about the same thing with nothing: it was not followed, so it
+  earns nothing, while memories that were followed rise past it. The Tier 2
+  evaluation watched a correct memory fall out of retrieval that way, after
+  which the rule it spoke to broke on 8 of the next 10 tasks. Only a failure
+  credits a counterpart, and only memories not named in the same call.
 - **`RetrievalConfig.legacy_3x()`**, the 3.x weights, category boosts,
   single-stage scoring and recency reading, so evaluations run against 3.x stay
   reproducible and callers who tuned for them can ask by name.
 - **`RetrievalConfig.recency_from_created`**, on by default.
+- **`MemoryEngine.search_mode`**, `hybrid` or `keyword`. Without an embedding
+  backend the engine falls back to keyword matching on purpose, and the two rank
+  differently enough that anything comparing runs needs to know which it got.
+  The Hermes provider reports it in its startup line and in every recall in the
+  evaluation trace, and warns at startup when it has fallen back, naming the
+  interpreter to install the extra into. `RUNTIME_MEMORY_EMBEDDING=null`
+  chooses keyword matching and silences the warning.
+- **`RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR=off`** (or `none`) turns the two-stage
+  pool off from the environment.
+- **Extraction is shown what is already stored**
+  (`ExtractionConfig.stored_context_limit`, 50 by default, 0 for the old
+  behaviour). The call is told not to extract what a stored memory already
+  says, in any words; to name the stored memory a new one updates, conflicts
+  with or extends; and to list the stored memories the conversation confirmed.
+  Before, nothing stopped a session from storing a rule again in new words, and
+  a store written by a few sessions of the same project could hold five copies
+  of each rule, which then took several of a recall's slots. Relations were
+  found by a separate classifier call per candidate pair, among memories of the
+  same category that shared words, so a restatement filed under another
+  category was never compared at all. Now they come from the call extraction
+  already makes. A project with more stored memories than the limit shows the
+  ones most relevant to the transcript.
+- **`MemoryEngine.confirm()`** and **`EngineConfig.skip_exact_duplicates`**, on
+  by default. `add` with the same text as a live memory in the same project,
+  once case, spacing and end punctuation are set aside, returns that memory
+  and counts a confirmation (`metadata["confirmations"]`,
+  `metadata["last_confirmed"]`) instead of storing a copy. Nothing looser is
+  merged: two notes that say opposite things can share every word, so a
+  similarity threshold cannot tell a restatement from a contradiction.
+  Confirmations from extraction land in the same place, and the Hermes trace
+  records them as their own `confirm` event. Nothing ranks on them yet.
 
 ### Fixed
 
@@ -53,6 +113,7 @@ stated below with what it was measured against.
   `CategoryRouter` exists and is tested, but nothing calls it, so the documented
   1.5x boost for troubleshooting memories on an error-shaped query never
   happened. The docs now say what retrieval does.
+- **The Hermes guide still described the relevance pool as off by default.**
 
 ### Migration
 

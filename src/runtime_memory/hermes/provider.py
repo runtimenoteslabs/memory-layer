@@ -25,6 +25,7 @@ writes, and - only when switched on - from end-of-session extraction.
 from __future__ import annotations
 
 import os
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -240,8 +241,22 @@ class RuntimeMemoryProvider(MemoryProvider):
 
         logger.info(
             f"Runtime Memory ready (db={self._db_path}, project={self._project}, "
-            f"writes={'on' if self._writes_allowed else 'off'})"
+            f"search={engine.search_mode}, writes={'on' if self._writes_allowed else 'off'})"
         )
+        # The engine factory degrades a missing model to keyword matching on
+        # purpose, and logs it as info so the CLI stays quiet. A provider starts
+        # once per session, and the extra usually goes missing by being installed
+        # into a different environment from Hermes', so here it is a warning that
+        # names the interpreter to install into. Choosing `null` says keyword
+        # matching is intended.
+        if engine.search_mode == "keyword" and os.environ.get("RUNTIME_MEMORY_EMBEDDING") != "null":
+            logger.warning(
+                "No embedding backend in this Python environment, so recall uses "
+                "keyword matching only. For semantic search, install it into the "
+                f"environment Hermes runs in: {sys.executable} -m pip install "
+                "'runtime-memory[embedding]'. Set RUNTIME_MEMORY_EMBEDDING=null to "
+                "choose keyword matching and silence this."
+            )
 
     async def _warm(self) -> None:
         """Touch the retrieval path once so the first real query is fast."""
@@ -329,6 +344,7 @@ class RuntimeMemoryProvider(MemoryProvider):
             results=results,
             project=self._project,
             latency_ms=(time.perf_counter() - started) * 1000,
+            search_mode=self._engine.search_mode,
         )
 
         if not results:
@@ -463,6 +479,13 @@ class RuntimeMemoryProvider(MemoryProvider):
                 memory_ids=[],
                 kind="extraction",
                 count=result.memory_count,
+            )
+        # What the session learned again rather than stored a second time.
+        if result.confirmed_ids:
+            self._trace.confirm(
+                turn_id=self._turn_id,
+                session_id=self._session_id,
+                memory_ids=result.confirmed_ids,
             )
 
     async def _store(

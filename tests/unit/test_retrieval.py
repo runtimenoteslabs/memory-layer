@@ -1066,7 +1066,10 @@ class TestRelevancePool:
         with pytest.raises(ValueError, match=r"at least 1\.0"):
             RetrievalConfig(relevance_pool_factor=0.5)
 
-    @pytest.mark.parametrize(("raw", "expected"), [(None, 2.0), ("", 2.0), ("2", 2.0), ("3", 3.0)])
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [(None, 2.0), ("", 2.0), ("2", 2.0), ("3", 3.0), ("off", None), ("None", None)],
+    )
     def test_read_from_the_environment(
         self, monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: float | None
     ) -> None:
@@ -1076,3 +1079,104 @@ class TestRelevancePool:
             monkeypatch.setenv("RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR", raw)
 
         assert RetrievalConfig.from_env().relevance_pool_factor == expected
+
+
+class TestSemanticScaling:
+    """Relative scaling: the best match among a query's candidates scores 1.0."""
+
+    @staticmethod
+    def keyword_retriever(
+        raw: dict[str, float], scaling: str = "relative"
+    ) -> HybridRetriever:
+        """A retriever whose BM25 returns given raw scores, with no vectors.
+
+        A long task prompt gives raw BM25 in the tens for most memories, which is
+        tedious to build from real text; fixing the raw scores states the case.
+        """
+        retriever = HybridRetriever(
+            MockEmbeddingProvider(), RetrievalConfig(semantic_scaling=scaling)
+        )
+        retriever._bm25.score_document = lambda doc_id, _query: raw.get(doc_id, 0.0)  # type: ignore[method-assign]
+        return retriever
+
+    def test_relative_is_the_default(self) -> None:
+        assert RetrievalConfig().semantic_scaling == "relative"
+        assert RetrievalConfig.legacy_3x().semantic_scaling == "fixed"
+
+    def test_unknown_scaling_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="semantic_scaling"):
+            RetrievalConfig(semantic_scaling="sigmoid")
+
+    def test_best_match_scores_one_and_no_match_zero(self) -> None:
+        best, weaker, none = (create_memory(text) for text in ("a", "b", "c"))
+        retriever = self.keyword_retriever({best.id: 40.0, weaker.id: 10.0})
+
+        scores = retriever._semantic_scores([best, weaker, none], "query", [])
+
+        assert scores == pytest.approx([1.0, 0.25, 0.0])
+
+    @pytest.mark.parametrize(("scaling", "winner"), [("relative", 0), ("fixed", 1)])
+    async def test_relevance_outranks_extraction_confidence(
+        self, scaling: str, winner: int
+    ) -> None:
+        """Without vectors, fixed scaling let confidence order saturated matches.
+
+        Raw BM25 of 30 and 15 become 0.968 and 0.938 under fixed scaling, a gap
+        the 0.55 semantic weight turns into 0.017, while confidence of 0.95
+        against 0.70 moves the score by 0.025.
+        """
+        memories = [
+            create_memory("the closer match", confidence=0.70),
+            create_memory("the weaker match", confidence=0.95),
+        ]
+        retriever = self.keyword_retriever(
+            {memories[0].id: 30.0, memories[1].id: 15.0}, scaling
+        )
+        for memory in memories:
+            retriever.add_memory(memory)
+
+        results = await retriever.search("a long task prompt", limit=1)
+
+        assert results[0].memory.id == memories[winner].id
+
+    def test_vectors_are_scaled_by_the_best_match(self) -> None:
+        """Cosine is clipped at zero and divided by the best, keywords add nothing."""
+        retriever = HybridRetriever(MockEmbeddingProvider(), RetrievalConfig())
+        close, halfway, opposite = (create_memory(text) for text in ("x", "y", "z"))
+        retriever.add_memory(close, [1.0, 0.0])
+        retriever.add_memory(halfway, [0.5, 0.866])
+        retriever.add_memory(opposite, [-1.0, 0.0])
+
+        scores = retriever._semantic_scores(
+            [close, halfway, opposite], "no shared words", [1.0, 0.0]
+        )
+
+        assert scores == pytest.approx([0.6, 0.3, 0.0], abs=1e-3)
+
+    def test_a_memory_without_a_vector_is_scored_on_keywords(self) -> None:
+        """As under fixed scaling, a missing vector is not counted against it."""
+        retriever = HybridRetriever(MockEmbeddingProvider(), RetrievalConfig())
+        embedded = create_memory("clear the pytest cache")
+        bare = create_memory("clear the pytest cache")
+        retriever.add_memory(embedded, [1.0, 0.0])
+        retriever.add_memory(bare)
+
+        embedded_score, bare_score = retriever._semantic_scores(
+            [embedded, bare], "pytest cache", [1.0, 0.0]
+        )
+
+        assert bare_score == pytest.approx(1.0)
+        assert embedded_score == pytest.approx(1.0)
+
+    def test_fixed_scaling_is_the_3x_formula(self) -> None:
+        retriever = HybridRetriever(
+            MockEmbeddingProvider(), RetrievalConfig(semantic_scaling="fixed")
+        )
+        memory = create_memory("clear the pytest cache when tests fail")
+        retriever.add_memory(memory)
+
+        (score,) = retriever._semantic_scores([memory], "pytest cache", [])
+
+        assert score == pytest.approx(
+            retriever._calculate_semantic_score(memory, "pytest cache", [])
+        )

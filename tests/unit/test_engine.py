@@ -798,3 +798,72 @@ class TestCreateEngineFactory:
         assert engine.config.pool_size == 3
         assert engine.config.auto_archive_enabled is False
         await engine.close()
+
+
+class TestExactDuplicates:
+    """A second copy of the same text is counted, not stored."""
+
+    async def test_same_text_returns_the_stored_memory(self, engine: MemoryEngine) -> None:
+        first = await engine.add(
+            content="Use uv to install dependencies", category=MemoryCategory.COMMAND, project="p"
+        )
+        again = await engine.add(
+            content="  use UV to install   dependencies.", category=MemoryCategory.GOTCHA, project="p"
+        )
+
+        assert again.id == first.id
+        assert again.metadata["confirmations"] == 1
+        assert len(await engine.list(project="p")) == 1
+
+    async def test_a_reversal_is_stored(self, engine: MemoryEngine) -> None:
+        """The same words saying the opposite are not a duplicate."""
+        await engine.add(content="Use uv, not pip", category=MemoryCategory.COMMAND, project="p")
+        await engine.add(content="Use pip, not uv", category=MemoryCategory.COMMAND, project="p")
+
+        assert len(await engine.list(project="p")) == 2
+
+    async def test_another_project_is_not_a_duplicate(self, engine: MemoryEngine) -> None:
+        await engine.add(content="Run make test", category=MemoryCategory.COMMAND, project="a")
+        other = await engine.add(content="Run make test", category=MemoryCategory.COMMAND, project="b")
+
+        assert other.project == "b"
+        assert len(await engine.list(project="b")) == 1
+
+    async def test_an_archived_copy_does_not_count(self, engine: MemoryEngine) -> None:
+        first = await engine.add(content="Run make test", category=MemoryCategory.COMMAND, project="p")
+        await engine.archive(first.id)
+
+        again = await engine.add(content="Run make test", category=MemoryCategory.COMMAND, project="p")
+
+        assert again.id != first.id
+
+    async def test_a_duplicate_still_retires_what_it_supersedes(self, engine: MemoryEngine) -> None:
+        kept = await engine.add(content="Use uv", category=MemoryCategory.COMMAND, project="p")
+        old = await engine.add(content="Use pip", category=MemoryCategory.COMMAND, project="p")
+
+        await engine.add(
+            content="Use uv", category=MemoryCategory.COMMAND, project="p", supersedes=old.id
+        )
+
+        assert (await engine.get(old.id)).archived
+        assert not (await engine.get(kept.id)).archived
+
+    async def test_can_be_turned_off(
+        self, temp_db_path: Path, mock_embedding_provider: MockEmbeddingProvider
+    ) -> None:
+        engine = MemoryEngine(
+            config=EngineConfig(
+                db_path=temp_db_path,
+                secure_permissions=False,
+                embedding_provider="mock",
+                skip_exact_duplicates=False,
+            ),
+            embedding_provider=mock_embedding_provider,
+        )
+        await engine.initialize()
+        try:
+            for _ in range(2):
+                await engine.add(content="Run make test", category=MemoryCategory.COMMAND, project="p")
+            assert len(await engine.list(project="p")) == 2
+        finally:
+            await engine.close()

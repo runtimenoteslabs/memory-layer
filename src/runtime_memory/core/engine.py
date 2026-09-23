@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import builtins
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +31,8 @@ from runtime_memory.core.models import (
     MemorySource,
     MemoryUpdate,
     Outcome,
+    Relationship,
+    RelationType,
     SearchResult,
 )
 from runtime_memory.core.paths import default_db_path
@@ -81,8 +84,31 @@ class EngineConfig:
     auto_archive_threshold: float = -0.5
     """Outcome score threshold below which memories are archived."""
 
+    # Counterpart credit
+    counterpart_credit: float = 0.05
+    """How much a memory gains when a memory it conflicts with is recorded as
+    having failed. 0.0 turns it off.
+
+    A contract that credits only what was acted on leaves the memory that was
+    right about the same thing with nothing: it was not followed, so it earns
+    nothing, while memories that were followed rise past it. The Tier 2
+    evaluation watched a correct memory fall out of retrieval that way, after
+    which the rule it spoke to broke on 8 of the next 10 tasks. The credit is
+    small because a conflict is evidence about the pair, not a demonstration
+    that this memory works."""
+
     auto_archive_on_search: bool = False
     """Whether to run auto-archival after searches (can impact performance)."""
+
+    skip_exact_duplicates: bool = True
+    """Whether ``add`` returns the existing memory instead of storing a second copy
+    of the same text in the same project, counting it as a confirmation.
+
+    Only text that is the same once case, spacing and end punctuation are set
+    aside counts. A near-duplicate is left alone: two notes that say opposite
+    things can share every word ("always Decimal, never float" and its reverse),
+    so similarity cannot tell a restatement from a contradiction. Extraction,
+    which reads both, decides those."""
 
     # Last search tracking
     track_last_search: bool = True
@@ -281,6 +307,17 @@ class MemoryEngine:
         return self._embedding_provider
 
     @property
+    def search_mode(self) -> str:
+        """``hybrid`` when memories are embedded for vector search, else ``keyword``.
+
+        Keyword matching is what the engine falls back to when no embedding
+        backend is installed, and a supported way to run. It ranks differently
+        enough that anything comparing runs, or explaining a ranking, needs to
+        know which of the two it got.
+        """
+        return "hybrid" if self.embedding_provider.available else "keyword"
+
+    @property
     def retriever(self) -> HybridRetriever:
         """Get the retriever instance."""
         self._ensure_initialized()
@@ -329,9 +366,18 @@ class MemoryEngine:
             metadata: Additional metadata.
 
         Returns:
-            The created Memory.
+            The created Memory, or with ``skip_exact_duplicates`` the stored
+            memory whose text it repeats.
         """
         self._ensure_initialized()
+
+        if self.config.skip_exact_duplicates:
+            existing = self._retriever.find_same_content(content, project)
+            if existing is not None:
+                if supersedes and supersedes != existing.id:
+                    await self._archive_superseded(supersedes)
+                logger.debug(f"Memory {existing.id} already says this; counted as confirmed")
+                return await self.confirm(existing.id)
 
         # Validate using Pydantic model
         create_model = MemoryCreate(
@@ -363,14 +409,38 @@ class MemoryEngine:
 
         # Archive superseded memory if specified
         if supersedes:
-            try:
-                await self._storage.archive(supersedes)
-                self._retriever.remove_memory(supersedes)
-            except MemoryNotFoundError:
-                logger.warning(f"Superseded memory {supersedes} not found")
+            await self._archive_superseded(supersedes)
 
         logger.debug(f"Added memory {memory.id}: {content[:50]}...")
         return memory
+
+    async def _archive_superseded(self, memory_id: str) -> None:
+        """Archive a memory another one replaces, and drop it from retrieval."""
+        try:
+            await self._storage.archive(memory_id)
+            self._retriever.remove_memory(memory_id)
+        except MemoryNotFoundError:
+            logger.warning(f"Superseded memory {memory_id} not found")
+
+    async def confirm(self, memory_id: str) -> Memory:
+        """Count one more time a memory was learned again, without storing a copy.
+
+        Kept in ``metadata["confirmations"]``, with ``metadata["last_confirmed"]``.
+        It is a record of how often a memory was re-observed, which is evidence it
+        holds, kept apart from outcomes, which are evidence it helped. Nothing
+        ranks on it yet.
+
+        Args:
+            memory_id: The memory that was learned again.
+
+        Returns:
+            The updated memory.
+        """
+        memory = await self.get(memory_id)
+        metadata = dict(memory.metadata)
+        metadata["confirmations"] = int(metadata.get("confirmations", 0)) + 1
+        metadata["last_confirmed"] = datetime.now(UTC).isoformat()
+        return await self.update(memory_id, metadata=metadata)
 
     async def add_memory(self, memory: Memory) -> Memory:
         """Add an existing Memory object.
@@ -727,8 +797,105 @@ class MemoryEngine:
         for memory in memories:
             self._retriever.update_memory(memory, memory.embedding)
 
+        credited = await self._credit_counterparts(memory_ids, outcome)
+
         logger.debug(f"Recorded {outcome.value} for {len(memories)} memories")
-        return memories
+        return memories + credited
+
+    async def _credit_counterparts(
+        self, failed_ids: _List[str], outcome: Outcome
+    ) -> _List[Memory]:
+        """Give a small credit to the memories a failed memory conflicts with.
+
+        See ``EngineConfig.counterpart_credit``. Only a failure does this: a
+        memory that worked says nothing about what contradicts it, since both
+        may be about different situations.
+
+        Args:
+            failed_ids: The memories the outcome was recorded against.
+            outcome: The outcome recorded.
+
+        Returns:
+            The counterpart memories that were credited.
+        """
+        if outcome is not Outcome.FAILED or not self.config.counterpart_credit:
+            return []
+
+        named = set(failed_ids)
+        counterparts: dict[str, None] = {}
+        for memory_id in failed_ids:
+            for other in await self._storage.related_ids(memory_id, RelationType.CONFLICTS_WITH):
+                if other not in named:
+                    counterparts.setdefault(other, None)
+        if not counterparts:
+            return []
+
+        credited = await self._storage.adjust_outcome_scores(
+            list(counterparts), self.config.counterpart_credit
+        )
+        for memory in credited:
+            self._retriever.update_memory(memory, memory.embedding)
+        logger.debug(
+            f"Credited {len(credited)} memories that conflict with {len(failed_ids)} failed"
+        )
+        return credited
+
+    async def link(
+        self,
+        source_id: str,
+        target_id: str,
+        relation_type: RelationType,
+        strength: float = 1.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> Relationship:
+        """Record how one memory relates to another.
+
+        A conflict is the link outcome learning reads: see
+        ``EngineConfig.counterpart_credit``.
+
+        Args:
+            source_id: The memory the link is from.
+            target_id: The memory the link is to.
+            relation_type: How they relate.
+            strength: How strong the link is, 0 to 1.
+            metadata: Anything else worth keeping, such as what found it.
+
+        Returns:
+            The stored relationship.
+
+        Raises:
+            MemoryNotFoundError: If either memory is missing.
+        """
+        self._ensure_initialized()
+        await self._storage.get(source_id)
+        await self._storage.get(target_id)
+
+        relationship = Relationship(
+            source_id=source_id,
+            target_id=target_id,
+            relation_type=relation_type,
+            strength=strength,
+            metadata=metadata or {},
+        )
+        await self._storage.add_relationship(relationship)
+        return relationship
+
+    async def related(
+        self,
+        memory_id: str,
+        relation_type: RelationType | None = None,
+    ) -> _List[Relationship]:
+        """The memory's relationships, in either direction.
+
+        Args:
+            memory_id: Memory ID.
+            relation_type: Only this type, or every type.
+
+        Returns:
+            The relationships, oldest first.
+        """
+        self._ensure_initialized()
+        return await self._storage.relationships(memory_id, relation_type)
 
     async def record_outcome_for_last_search(self, outcome: Outcome) -> _List[Memory]:
         """Record outcome for the memories from the last search.

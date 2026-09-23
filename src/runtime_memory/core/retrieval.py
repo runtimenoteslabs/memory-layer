@@ -55,7 +55,23 @@ class RetrievalConfig:
 
     # Vector search parameters
     vector_weight: float = 0.6  # Weight of vector vs BM25 in semantic score
-    min_vector_similarity: float = 0.3  # Minimum similarity threshold
+    # Cosine below this is halved. Fixed scaling only; relative scaling divides
+    # by the best match instead.
+    min_vector_similarity: float = 0.3
+
+    # How the two semantic parts are brought to 0-1 before they are combined.
+    # "relative", the default since 4.0.0, divides each by the best match among
+    # the query's candidates: BM25 by the highest BM25, cosine (clipped at zero)
+    # by the highest cosine. The best match scores 1.0 and no match still scores
+    # 0.0. "fixed" is the 3.x scaling, BM25 / (BM25 + 1) and (cos + 1) / 2. A
+    # task-length query gives raw BM25 of 2 to 69, so the first sits near 1 for
+    # nearly every memory, and the second halves the spread of cosine: the
+    # semantic score of the top 16 candidates then spans about 0.04 without
+    # vectors, which is less than confidence's 0.10 weight moves a memory, so
+    # the extractor's self-reported confidence ordered the pool, not relevance.
+    # The order by semantic score alone is the same either way; what changes is
+    # how much it counts against the other signals.
+    semantic_scaling: str = "relative"
 
     # Recency decay parameters
     recency_half_life_days: float = 30.0  # Half-life for recency decay
@@ -79,18 +95,17 @@ class RetrievalConfig:
     # at or above zero is untouched and a memory at the floor gets no boost.
     outcome_gates_frequency: bool = False
 
-    # Two-stage retrieval. None, the default, scores exactly as before: every
-    # candidate competes on the full score, of which only the semantic signal
-    # depends on the query, so category boost, outcome and frequency can seat a
-    # memory that barely matches the query above one that matches it well. The
-    # Tier 2 evaluation found a gotcha ranked 25th of 38 on relevance injected
-    # first. Set to a factor of at least 1.0, a search first keeps the
-    # ceil(limit x factor) candidates with the highest semantic score, dropping
-    # any with none at all, and only that pool competes on the full score. The
-    # other signals then choose among relevant memories rather than decide
-    # whether an unrelated one gets in. At 1.0 they can only reorder; above it
-    # they can replace a relevant memory that keeps failing with the next one.
-    # On by default since 4.0.0; None restores 3.x scoring.
+    # Two-stage retrieval. A search first keeps the ceil(limit x factor)
+    # candidates with the highest semantic score, dropping any with none at all,
+    # and only that pool competes on the full score. The other signals then
+    # choose among relevant memories rather than decide whether an unrelated one
+    # gets in. At 1.0 they can only reorder; above it they can replace a
+    # relevant memory that keeps failing with the next one. None, the 3.x
+    # behaviour, lets every candidate compete on the full score, of which only
+    # the semantic signal depends on the query, so category boost, outcome and
+    # frequency can seat a memory that barely matches the query above one that
+    # matches it well: the Tier 2 evaluation found a gotcha ranked 25th of 38 on
+    # relevance injected first. On by default since 4.0.0.
     relevance_pool_factor: float | None = 2.0
 
     # Category boosting. Empty means every category scores at 1.0, the default
@@ -106,20 +121,25 @@ class RetrievalConfig:
     dedup_threshold: float = 0.95  # Similarity threshold for deduplication
 
     def __post_init__(self) -> None:
-        """Check the pool factor.
+        """Check the pool factor and the semantic scaling.
 
         Raises:
             ValueError: If ``relevance_pool_factor`` is below 1.0, which would make
-                the pool smaller than the limit it is meant to fill.
+                the pool smaller than the limit it is meant to fill, or if
+                ``semantic_scaling`` is neither ``relative`` nor ``fixed``.
         """
         if self.relevance_pool_factor is not None and self.relevance_pool_factor < 1.0:
             raise ValueError(
                 f"relevance_pool_factor must be at least 1.0, got {self.relevance_pool_factor}"
             )
+        if self.semantic_scaling not in ("relative", "fixed"):
+            raise ValueError(
+                f"semantic_scaling must be 'relative' or 'fixed', got {self.semantic_scaling!r}"
+            )
 
     @classmethod
     def legacy_3x(cls, **overrides: Any) -> RetrievalConfig:
-        """The scoring 3.x shipped: five weighted signals, category boosts, no pool.
+        """The scoring 3.x shipped: category boosts, no pool, fixed semantic scaling.
 
         Kept so evaluations run against 3.x remain reproducible, and so a caller
         who tuned for those numbers can ask for them by name.
@@ -138,6 +158,7 @@ class RetrievalConfig:
             "confidence_weight": 0.10,
             "relevance_pool_factor": None,
             "recency_from_created": False,
+            "semantic_scaling": "fixed",
             "category_boosts": {
                 MemoryCategory.GOTCHA: 1.3,
                 MemoryCategory.TROUBLESHOOTING: 1.2,
@@ -160,8 +181,9 @@ class RetrievalConfig:
         outcome, recency, frequency and confidence. Weights are applied as
         given, never renormalised: an ablation that zeroes one signal should
         leave the others exactly where they were, not silently reweight them.
-        ``RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR`` turns on two-stage retrieval;
-        unset or empty leaves it off.
+        ``RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR`` sets the two-stage pool's
+        factor; ``off`` or ``none`` turns the pool off, and unset or empty keeps
+        the default.
 
         Args:
             **overrides: Field values that win over both defaults and env.
@@ -175,10 +197,17 @@ class RetrievalConfig:
             if raw is not None:
                 values[f"{signal}_weight"] = float(raw)
         pool = os.environ.get("RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR", "").strip()
-        if pool:
+        if pool.lower() in ("off", "none"):
+            values["relevance_pool_factor"] = None
+        elif pool:
             values["relevance_pool_factor"] = float(pool)
         values.update(overrides)
         return cls(**values)
+
+
+def _normalized_text(text: str) -> str:
+    """Text with case, runs of whitespace and end punctuation set aside."""
+    return " ".join(text.lower().split()).strip(" .!?;:,")
 
 
 class BM25Index:
@@ -417,6 +446,29 @@ class HybridRetriever:
         elif memory.embedding:
             self._embeddings[memory.id] = memory.embedding
 
+    def find_same_content(self, content: str, project: str | None) -> Memory | None:
+        """Find a live memory in the same project whose text is the same as this.
+
+        The same once case, runs of whitespace and end punctuation are set aside,
+        and nothing looser: see ``EngineConfig.skip_exact_duplicates``.
+
+        Args:
+            content: Text about to be stored.
+            project: Its project, None for global.
+
+        Returns:
+            The first such memory indexed, or None.
+        """
+        wanted = _normalized_text(content)
+        for memory in self._memories.values():
+            if (
+                not memory.archived
+                and memory.project == project
+                and _normalized_text(memory.content) == wanted
+            ):
+                return memory
+        return None
+
     def remove_memory(self, memory_id: str) -> None:
         """Remove a memory from the retrieval index.
 
@@ -500,9 +552,12 @@ class HybridRetriever:
         if not candidates:
             return []
 
-        # Score all candidates
+        # Score all candidates. Relative scaling needs the best match among them,
+        # so the semantic scores are computed together before anything is combined.
+        semantic_scores = self._semantic_scores(candidates, query, query_embedding)
         results = [
-            self._score_memory(memory, query, query_embedding) for memory in candidates
+            self._score_memory(memory, semantic)
+            for memory, semantic in zip(candidates, semantic_scores, strict=True)
         ]
 
         # See RetrievalConfig.relevance_pool_factor. Relevance is decided before
@@ -566,27 +621,70 @@ class HybridRetriever:
             candidates.append(memory)
         return candidates
 
-    def _score_memory(
+    def _semantic_scores(
         self,
-        memory: Memory,
+        candidates: list[Memory],
         query: str,
         query_embedding: EmbeddingVector,
-    ) -> SearchResult:
-        """Score a memory against a query.
+    ) -> list[float]:
+        """Score every candidate's relevance to the query, as configured.
+
+        See ``RetrievalConfig.semantic_scaling``. Under relative scaling each part
+        is divided by its best value among these candidates, so the best keyword
+        match and the best vector match each score 1.0 and no match scores 0.0.
+        A memory without a vector, or a query without one, is scored on keywords
+        alone, as under fixed scaling.
+
+        Args:
+            candidates: Memories that passed the search's filters.
+            query: Search query text.
+            query_embedding: Query embedding vector, empty without a backend.
+
+        Returns:
+            One semantic score in 0-1 per candidate, in the same order.
+        """
+        if self.config.semantic_scaling == "fixed":
+            return [
+                self._calculate_semantic_score(memory, query, query_embedding)
+                for memory in candidates
+            ]
+
+        keyword = [self._bm25.score_document(memory.id, query) for memory in candidates]
+        vector = [self._vector_similarity(memory, query_embedding) for memory in candidates]
+        best_keyword = max(keyword, default=0.0)
+        best_vector = max((max(v, 0.0) for v in vector if v is not None), default=0.0)
+        vector_weight = self.config.vector_weight
+
+        scores = []
+        for keyword_score, similarity in zip(keyword, vector, strict=True):
+            keyword_part = keyword_score / best_keyword if best_keyword > 0 else 0.0
+            if similarity is None:
+                scores.append(keyword_part)
+                continue
+            vector_part = max(similarity, 0.0) / best_vector if best_vector > 0 else 0.0
+            scores.append((1.0 - vector_weight) * keyword_part + vector_weight * vector_part)
+        return scores
+
+    def _vector_similarity(
+        self, memory: Memory, query_embedding: EmbeddingVector
+    ) -> float | None:
+        """Cosine similarity of a memory to the query, or None without both vectors."""
+        if not query_embedding or memory.id not in self._embeddings:
+            return None
+        return self.embedding_provider.cosine_similarity(
+            query_embedding, self._embeddings[memory.id]
+        )
+
+    def _score_memory(self, memory: Memory, semantic_score: float) -> SearchResult:
+        """Combine a memory's signals into its search score.
 
         Args:
             memory: Memory to score.
-            query: Search query text.
-            query_embedding: Query embedding vector.
+            semantic_score: Its relevance to the query, from ``_semantic_scores``.
 
         Returns:
             SearchResult with scoring breakdown.
         """
-        # Calculate semantic score (BM25 + vector)
-        semantic_score = self._calculate_semantic_score(
-            memory, query, query_embedding
-        )
-
         # Calculate recency score
         recency_score = self._calculate_recency_score(memory)
 
@@ -626,9 +724,10 @@ class HybridRetriever:
         query: str,
         query_embedding: EmbeddingVector,
     ) -> float:
-        """Calculate semantic relevance score.
+        """Calculate one memory's semantic score under fixed scaling.
 
-        Combines BM25 text matching with vector similarity.
+        Combines BM25 text matching with vector similarity, each scaled on its
+        own: see ``RetrievalConfig.semantic_scaling``.
 
         Args:
             memory: Memory to score.

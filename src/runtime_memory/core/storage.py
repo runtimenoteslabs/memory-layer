@@ -32,6 +32,8 @@ from runtime_memory.core.models import (
     MemoryScope,
     MemorySource,
     Outcome,
+    Relationship,
+    RelationType,
 )
 
 if TYPE_CHECKING:
@@ -43,7 +45,7 @@ _List = builtins.list
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # SQL statements for schema creation
 SCHEMA_SQL = """
@@ -78,6 +80,22 @@ CREATE INDEX IF NOT EXISTS idx_memories_outcome_score ON memories(outcome_score)
 CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at);
 CREATE INDEX IF NOT EXISTS idx_memories_project_category ON memories(project, category);
 CREATE INDEX IF NOT EXISTS idx_memories_project_archived ON memories(project, archived);
+
+-- How memories relate to each other (schema 2). A conflict recorded here is
+-- what lets an outcome reach the memory that contradicts the one that failed,
+-- instead of leaving it to be out-ranked.
+CREATE TABLE IF NOT EXISTS memory_relations (
+    source_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    relation_type TEXT NOT NULL,
+    strength REAL DEFAULT 1.0,
+    created_at TEXT NOT NULL,
+    metadata TEXT DEFAULT '{}',
+    PRIMARY KEY (source_id, target_id, relation_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_relations_source ON memory_relations(source_id);
+CREATE INDEX IF NOT EXISTS idx_relations_target ON memory_relations(target_id);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -116,8 +134,19 @@ END;
 
 # Migration SQL statements (version -> SQL)
 MIGRATIONS: dict[int, str] = {
-    # Future migrations go here
-    # 2: "ALTER TABLE memories ADD COLUMN new_field TEXT;",
+    2: """
+        CREATE TABLE IF NOT EXISTS memory_relations (
+            source_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            strength REAL DEFAULT 1.0,
+            created_at TEXT NOT NULL,
+            metadata TEXT DEFAULT '{}',
+            PRIMARY KEY (source_id, target_id, relation_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_relations_source ON memory_relations(source_id);
+        CREATE INDEX IF NOT EXISTS idx_relations_target ON memory_relations(target_id);
+    """,
 }
 
 
@@ -518,16 +547,21 @@ class MemoryStorage:
             sql = "DELETE FROM memories WHERE id = ?"
         else:
             sql = "UPDATE memories SET archived = 1, updated_at = ? WHERE id = ?"
+        # A hard delete takes the memory's relations with it; an archived memory
+        # keeps them, because archiving is reversible.
+        relations_sql = "DELETE FROM memory_relations WHERE source_id = ? OR target_id = ?"
 
         if conn:
             if hard_delete:
                 await conn.execute(sql, (memory_id,))
+                await conn.execute(relations_sql, (memory_id, memory_id))
             else:
                 await conn.execute(sql, (datetime.now(UTC).isoformat(), memory_id))
         else:
             async with self._get_connection() as c:
                 if hard_delete:
                     await c.execute(sql, (memory_id,))
+                    await c.execute(relations_sql, (memory_id, memory_id))
                 else:
                     await c.execute(sql, (datetime.now(UTC).isoformat(), memory_id))
                 await c.commit()
@@ -791,6 +825,125 @@ class MemoryStorage:
         memory.updated_at = datetime.now(UTC)
         logger.debug(f"Recorded {outcome.value} for memory {memory_id}, score: {new_score}")
         return memory
+
+    async def adjust_outcome_scores(
+        self,
+        memory_ids: _List[str],
+        delta: float,
+    ) -> _List[Memory]:
+        """Move several memories' outcome scores by a fixed amount, clamped.
+
+        Used for credit that is not an outcome of its own, such as the counterpart
+        of a memory that failed. It is recorded against the memories named and
+        nothing else.
+
+        Args:
+            memory_ids: Memory IDs.
+            delta: Amount to add, positive or negative.
+
+        Returns:
+            The updated memories, in the order given.
+        """
+        updated: _List[Memory] = []
+        async with self.transaction() as conn:
+            for memory_id in memory_ids:
+                memory = await self.get(memory_id)
+                new_score = max(-1.0, min(1.0, memory.outcome_score + delta))
+                await conn.execute(
+                    "UPDATE memories SET outcome_score = ?, updated_at = ? WHERE id = ?",
+                    (new_score, datetime.now(UTC).isoformat(), memory_id),
+                )
+                memory.outcome_score = new_score
+                memory.updated_at = datetime.now(UTC)
+                updated.append(memory)
+        return updated
+
+    # =========================================================================
+    # Relations
+    # =========================================================================
+
+    async def add_relationship(self, relationship: Relationship) -> None:
+        """Store how one memory relates to another, replacing any same-typed link.
+
+        Args:
+            relationship: The relationship to store.
+        """
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT OR REPLACE INTO memory_relations
+                    (source_id, target_id, relation_type, strength, created_at, metadata)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    relationship.source_id,
+                    relationship.target_id,
+                    relationship.relation_type.value,
+                    relationship.strength,
+                    relationship.created_at.isoformat(),
+                    json.dumps(relationship.metadata),
+                ),
+            )
+            await conn.commit()
+
+    async def relationships(
+        self,
+        memory_id: str,
+        relation_type: RelationType | None = None,
+    ) -> _List[Relationship]:
+        """Every relationship the memory takes part in, in either direction.
+
+        A conflict has no direction, and a caller asking what a memory conflicts
+        with should not have to know which side wrote the link.
+
+        Args:
+            memory_id: Memory ID.
+            relation_type: Only this type, or every type.
+
+        Returns:
+            The relationships, oldest first.
+        """
+        sql = "SELECT * FROM memory_relations WHERE (source_id = ? OR target_id = ?)"
+        params: list[Any] = [memory_id, memory_id]
+        if relation_type is not None:
+            sql += " AND relation_type = ?"
+            params.append(relation_type.value)
+        sql += " ORDER BY created_at"
+
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
+        return [
+            Relationship(
+                source_id=row["source_id"],
+                target_id=row["target_id"],
+                relation_type=RelationType(row["relation_type"]),
+                strength=row["strength"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                metadata=json.loads(row["metadata"] or "{}"),
+            )
+            for row in rows
+        ]
+
+    async def related_ids(
+        self,
+        memory_id: str,
+        relation_type: RelationType,
+    ) -> _List[str]:
+        """The ids on the other side of a memory's relationships of one type.
+
+        Args:
+            memory_id: Memory ID.
+            relation_type: The type to follow.
+
+        Returns:
+            The other memories' ids, without duplicates.
+        """
+        seen: dict[str, None] = {}
+        for link in await self.relationships(memory_id, relation_type):
+            other = link.target_id if link.source_id == memory_id else link.source_id
+            seen.setdefault(other, None)
+        return list(seen)
 
     async def record_outcomes(
         self,

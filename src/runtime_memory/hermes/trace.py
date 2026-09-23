@@ -68,6 +68,7 @@ class TraceWriter:
         results: list[Any],
         project: str | None,
         latency_ms: float,
+        search_mode: str | None = None,
     ) -> None:
         """Record what a recall injected.
 
@@ -78,6 +79,8 @@ class TraceWriter:
             results: ``SearchResult`` objects that were injected.
             project: Project filter in force, if any.
             latency_ms: Wall-clock retrieval time.
+            search_mode: ``hybrid`` or ``keyword``, so a run that lost its
+                embedding backend can be told apart from one that had it.
         """
         self._write(
             {
@@ -86,6 +89,7 @@ class TraceWriter:
                 "session_id": session_id,
                 "query": query,
                 "project": project,
+                "search_mode": search_mode,
                 "latency_ms": round(latency_ms, 2),
                 "retrieved": [
                     {
@@ -157,6 +161,23 @@ class TraceWriter:
                 "kind": kind,
                 "memory_ids": memory_ids,
                 "count": len(memory_ids) if count is None else count,
+            }
+        )
+
+    def confirm(self, *, turn_id: str, session_id: str, memory_ids: list[str]) -> None:
+        """Record stored memories a session learned again instead of storing copies.
+
+        Args:
+            turn_id: The turn the confirmation belongs to.
+            session_id: Hermes session that produced it.
+            memory_ids: The memories confirmed.
+        """
+        self._write(
+            {
+                "event": "confirm",
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "memory_ids": memory_ids,
             }
         )
 

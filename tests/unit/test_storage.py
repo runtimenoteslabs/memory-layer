@@ -7,6 +7,7 @@ import os
 import stat
 from pathlib import Path
 
+import aiosqlite
 import pytest
 
 from runtime_memory.core.models import (
@@ -15,6 +16,8 @@ from runtime_memory.core.models import (
     MemoryScope,
     MemorySource,
     Outcome,
+    Relationship,
+    RelationType,
 )
 from runtime_memory.core.storage import (
     MemoryNotFoundError,
@@ -775,3 +778,42 @@ class TestEdgeCases:
         await storage.create(memory)
         retrieved = await storage.get(memory.id)
         assert retrieved.embedding == embedding
+
+
+class TestRelationsMigration:
+    """Schema 2 adds memory_relations, including to a database created before it."""
+
+    async def test_a_store_created_before_schema_2_gains_the_table(
+        self, temp_db_path: Path
+    ) -> None:
+        store = MemoryStorage(temp_db_path, pool_size=2, secure_permissions=False)
+        await store.initialize()
+        await store.close()
+
+        # Put the database back as schema 1 left it.
+        async with aiosqlite.connect(temp_db_path) as conn:
+            await conn.execute("DROP TABLE memory_relations")
+            await conn.execute("DELETE FROM schema_version")
+            await conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (1, '2026-01-01T00:00:00')"
+            )
+            await conn.commit()
+
+        reopened = MemoryStorage(temp_db_path, pool_size=2, secure_permissions=False)
+        await reopened.initialize()
+        try:
+            memory = Memory(content="Amounts are Decimal", category=MemoryCategory.CONVENTION)
+            other = Memory(content="Amounts can be floats", category=MemoryCategory.CONVENTION)
+            await reopened.create(memory)
+            await reopened.create(other)
+            await reopened.add_relationship(
+                Relationship(
+                    source_id=other.id,
+                    target_id=memory.id,
+                    relation_type=RelationType.CONFLICTS_WITH,
+                )
+            )
+
+            assert await reopened.related_ids(memory.id, RelationType.CONFLICTS_WITH) == [other.id]
+        finally:
+            await reopened.close()

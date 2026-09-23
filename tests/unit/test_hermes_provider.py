@@ -277,6 +277,48 @@ class TestEmbeddingBackend:
         finally:
             instance.shutdown()
 
+    def test_missing_model_is_said_out_loud(self, tmp_path, monkeypatch):
+        """Keyword-only recall ranks differently, so falling into it is a warning.
+
+        The warning names this interpreter, because the extra usually goes
+        missing by being installed into a different environment from Hermes'.
+        """
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+        monkeypatch.delenv("RUNTIME_MEMORY_EMBEDDING", raising=False)
+        _hide_sentence_transformers(monkeypatch)
+
+        instance = RuntimeMemoryProvider()
+        with patch("runtime_memory.hermes.provider.logger") as mock_logger:
+            instance.initialize("session-keyword", agent_context="primary")
+        try:
+            assert instance._engine.search_mode == "keyword"
+            warnings = " ".join(str(call) for call in mock_logger.warning.call_args_list)
+            assert "keyword matching only" in warnings
+            assert sys.executable in warnings
+            ready = " ".join(str(call) for call in mock_logger.info.call_args_list)
+            assert "search=keyword" in ready
+        finally:
+            instance.shutdown()
+
+    def test_choosing_keyword_matching_is_quiet(self, tmp_path, monkeypatch):
+        """`null` says keyword matching is intended, so there is nothing to warn about."""
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "null")
+
+        instance = RuntimeMemoryProvider()
+        with patch("runtime_memory.hermes.provider.logger") as mock_logger:
+            instance.initialize("session-null-chosen", agent_context="primary")
+        try:
+            assert instance._engine.search_mode == "keyword"
+            warnings = " ".join(str(call) for call in mock_logger.warning.call_args_list)
+            assert "keyword matching only" not in warnings
+        finally:
+            instance.shutdown()
+
+    def test_vectors_make_it_hybrid(self, provider):
+        """A backend that produces vectors reports hybrid search."""
+        assert provider._engine.search_mode == "hybrid"
+
 
 # =============================================================================
 # Recall Tests
@@ -772,6 +814,7 @@ class TestTrace:
         by_event = {event["event"]: event for event in events}
 
         assert by_event["recall"]["retrieved"][0]["memory_id"]
+        assert by_event["recall"]["search_mode"] == "hybrid"
         assert by_event["recall"]["turn_id"] == by_event["outcome"]["turn_id"]
         assert by_event["outcome"]["outcome"] == "worked"
         assert by_event["outcome"]["origin"] == "tool"
@@ -816,6 +859,17 @@ class TestTrace:
         writer.write_turn(turn_id="t", session_id="s", memory_ids=["a", "b"], kind="tool")
 
         assert json.loads(path.read_text())["count"] == 2
+
+    def test_confirmations_are_not_writes(self, tmp_path):
+        """A memory learned again is its own event, so it never counts as a write."""
+        path = tmp_path / "t.jsonl"
+        writer = TraceWriter(path)
+
+        writer.confirm(turn_id="t", session_id="s", memory_ids=["a"])
+
+        record = json.loads(path.read_text())
+        assert record["event"] == "confirm"
+        assert record["memory_ids"] == ["a"]
 
 
 # =============================================================================
