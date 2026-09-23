@@ -9,6 +9,7 @@ import pytest
 
 from runtime_memory.core.embeddings import MockEmbeddingProvider
 from runtime_memory.core.models import Memory, MemoryCategory, SearchResult
+from runtime_memory.core.outcomes import pseudo_counts
 from runtime_memory.core.retrieval import (
     BM25Index,
     CategoryRouter,
@@ -55,13 +56,21 @@ def create_memory(
     archived: bool = False,
     confidence: float = 1.0,
 ) -> Memory:
-    """Helper to create test memories."""
+    """Helper to create test memories.
+
+    ``outcome_score`` is given as a 3.x score and stored with the worked and
+    failed counts it stands for, since 4.0 ranks on the counts.
+    """
     created_at = datetime.now(UTC) - timedelta(days=days_old)
+    worked, failed = pseudo_counts(outcome_score)
     return Memory(
         content=content,
         category=category,
         project=project,
         outcome_score=outcome_score,
+        worked=worked,
+        failed=failed,
+        evidence_at=created_at if outcome_score else None,
         use_count=use_count,
         created_at=created_at,
         updated_at=created_at,
@@ -573,6 +582,8 @@ class TestScoringComponents:
         This is the shipped behaviour the gate exists to change: retrieval counts
         as use, and use pays whatever the outcome record says.
         """
+        # The failure gate would keep a memory at the floor out altogether.
+        retriever.config.failure_gate = None
         memory = create_memory("Popular but failing memory", use_count=50, outcome_score=-1.0)
         retriever.add_memory(memory)
 
@@ -591,8 +602,11 @@ class TestScoringComponents:
         factor: float,
     ) -> None:
         """With the gate on, the boost is untouched at or above zero and gone at -1."""
-        ungated = HybridRetriever(mock_provider, RetrievalConfig())
-        gated = HybridRetriever(mock_provider, RetrievalConfig(outcome_gates_frequency=True))
+        # failure_gate=None: the failure gate would keep these memories out altogether.
+        ungated = HybridRetriever(mock_provider, RetrievalConfig(failure_gate=None))
+        gated = HybridRetriever(
+            mock_provider, RetrievalConfig(outcome_gates_frequency=True, failure_gate=None)
+        )
         ungated.add_memory(create_memory("Popular memory", use_count=50, outcome_score=outcome_score))
         gated.add_memory(create_memory("Popular memory", use_count=50, outcome_score=outcome_score))
 
@@ -642,7 +656,8 @@ class TestScoringComponents:
     ) -> None:
         """Test that positive outcome boosts score."""
         memory_good = create_memory("Good pattern", outcome_score=0.8)
-        memory_bad = create_memory("Bad pattern", outcome_score=-0.8)
+        # One failure: ranked down, not yet gated.
+        memory_bad = create_memory("Bad pattern", outcome_score=-0.3)
 
         retriever.add_memory(memory_good)
         retriever.add_memory(memory_bad)
@@ -1011,22 +1026,32 @@ class TestRelevancePool:
         results = await pooled.search(self.QUERY, limit=5)
         assert [r.memory.id for r in results] == [relevant.id]
 
+    @staticmethod
+    def near_equal() -> list[Memory]:
+        """Two memories almost equally relevant: the closer one failed once, the
+        other worked three times. Relevance alone keeps the closer one first."""
+        closer = create_memory("Clear the pytest cache when tests fail randomly")
+        closer.failed, closer.evidence_at = 1.0, closer.created_at
+        other = create_memory("Clear the pytest cache when tests fail")
+        other.worked, other.evidence_at = 3.0, other.created_at
+        return [closer, other, create_memory("Pin dependency versions in the lockfile")]
+
     @pytest.mark.parametrize(
         ("factor", "expected"),
         [
             # A pool the size of the limit: the other signals can only reorder,
-            # so the most relevant memory stays despite failing.
+            # so the most relevant memory stays despite its failure.
             (1.0, "Clear the pytest cache when tests fail randomly"),
             # ceil(1 x 1.5) = 2: the next most relevant can replace it.
-            (1.5, "Tests fail randomly when the cache is stale"),
-            (2.0, "Tests fail randomly when the cache is stale"),
+            (1.5, "Clear the pytest cache when tests fail"),
+            (2.0, "Clear the pytest cache when tests fail"),
         ],
     )
     async def test_pool_size_decides_what_outcome_can_replace(
         self, factor: float, expected: str
     ) -> None:
         retriever = self.retriever(factor)
-        for memory in self.graded():
+        for memory in self.near_equal():
             retriever.add_memory(memory)
 
         results = await retriever.search(self.QUERY, limit=1)
@@ -1035,17 +1060,17 @@ class TestRelevancePool:
 
     async def test_other_signals_still_order_the_pool(self) -> None:
         """Within the pool the full score decides, so the most relevant memory,
-        which keeps failing, ranks below the next one, which keeps working."""
+        which failed, ranks below the next one, which keeps working."""
         retriever = self.retriever(1.0)
-        memories = self.graded()
-        for memory in memories:
+        closer, other, unrelated = self.near_equal()
+        # The unrelated memory stays in the index: it sets BM25's term weights.
+        for memory in (closer, other, unrelated):
             retriever.add_memory(memory)
 
-        results = await retriever.search(self.QUERY, limit=3)
+        results = await retriever.search(self.QUERY, limit=2)
 
-        assert {r.memory.id for r in results} == {m.id for m in memories[:3]}
         assert results[0].semantic_score < results[1].semantic_score
-        assert [r.memory.id for r in results[:2]] == [memories[1].id, memories[0].id]
+        assert [r.memory.id for r in results] == [other.id, closer.id]
 
     async def test_without_the_pool_a_weak_match_wins_on_boost_and_use(self) -> None:
         """3.x scoring: category boost and use count outrank relevance."""
@@ -1180,3 +1205,57 @@ class TestSemanticScaling:
         assert score == pytest.approx(
             retriever._calculate_semantic_score(memory, "pytest cache", [])
         )
+
+
+class TestFailureGate:
+    """A memory whose record reads -0.5 or worse is not retrieved."""
+
+    QUERY = "clear the pytest cache when tests fail randomly"
+
+    @staticmethod
+    def pair(failed: float, days_ago: float = 0.0) -> tuple[Memory, Memory]:
+        """The most relevant memory with this many failures, and a weaker match."""
+        failing = create_memory("Clear the pytest cache when tests fail randomly")
+        failing.failed = failed
+        failing.evidence_at = datetime.now(UTC) - timedelta(days=days_ago)
+        return failing, create_memory("Tests fail randomly when the cache is stale")
+
+    async def _top(self, config: RetrievalConfig, failing: Memory, other: Memory) -> Memory:
+        retriever = HybridRetriever(MockEmbeddingProvider(), config)
+        for memory in (failing, other):
+            retriever.add_memory(memory)
+        return (await retriever.search(self.QUERY, limit=1))[0].memory
+
+    async def test_a_memory_that_keeps_failing_is_not_retrieved(self) -> None:
+        """However well it matches: two failures read -0.6 and gate it."""
+        failing, other = self.pair(failed=2.0)
+
+        assert await self._top(RetrievalConfig(), failing, other) is other
+
+    async def test_one_failure_does_not_gate(self) -> None:
+        """One failure reads -0.43 and may be a misattribution."""
+        failing, other = self.pair(failed=1.0)
+
+        assert await self._top(RetrievalConfig(), failing, other) is failing
+
+    async def test_the_gate_lifts_as_failures_fade(self) -> None:
+        """Two failures 200 days old have decayed to under one."""
+        failing, other = self.pair(failed=2.0, days_ago=200)
+
+        assert await self._top(RetrievalConfig(), failing, other) is failing
+
+    async def test_the_gate_can_be_turned_off(self) -> None:
+        failing, other = self.pair(failed=2.0)
+
+        assert await self._top(RetrievalConfig(failure_gate=None), failing, other) is failing
+
+    async def test_no_outcome_weight_means_no_gate(self) -> None:
+        """An arm that switches outcome learning off switches the gate off with it."""
+        failing, other = self.pair(failed=2.0)
+
+        assert await self._top(RetrievalConfig(outcome_weight=0.0), failing, other) is failing
+
+    async def test_3x_scoring_has_no_gate(self) -> None:
+        failing, other = self.pair(failed=2.0)
+
+        assert await self._top(RetrievalConfig.legacy_3x(), failing, other) is failing

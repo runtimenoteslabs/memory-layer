@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
+from datetime import datetime
 from pathlib import Path
 
 import aiosqlite
@@ -19,6 +20,7 @@ from runtime_memory.core.models import (
     Relationship,
     RelationType,
 )
+from runtime_memory.core.outcomes import OutcomeModel
 from runtime_memory.core.storage import (
     MemoryNotFoundError,
     MemoryStorage,
@@ -815,5 +817,72 @@ class TestRelationsMigration:
             )
 
             assert await reopened.related_ids(memory.id, RelationType.CONFLICTS_WITH) == [other.id]
+        finally:
+            await reopened.close()
+
+
+class TestOutcomeEvidenceMigration:
+    """Schema 3 turns each stored 3.x score into the counts it stands for."""
+
+    @staticmethod
+    async def _as_schema_2(path: Path, scores: dict[str, float]) -> None:
+        """Rewrite a fresh store as schema 2 left it, with these 3.x scores."""
+        async with aiosqlite.connect(path) as conn:
+            for memory_id, score in scores.items():
+                await conn.execute(
+                    "UPDATE memories SET outcome_score = ?, updated_at = ? WHERE id = ?",
+                    (score, "2026-09-01T00:00:00+00:00", memory_id),
+                )
+            for column in ("worked", "failed", "evidence_at"):
+                await conn.execute(f"ALTER TABLE memories DROP COLUMN {column}")
+            await conn.execute("DELETE FROM schema_version")
+            await conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (2, '2026-09-01T00:00:00')"
+            )
+            await conn.commit()
+
+    async def test_scores_become_counts(self, temp_db_path: Path) -> None:
+        store = MemoryStorage(temp_db_path, pool_size=2, secure_permissions=False)
+        await store.initialize()
+        proven = Memory(content="Use uv", category=MemoryCategory.COMMAND)
+        discredited = Memory(content="Use pip", category=MemoryCategory.COMMAND)
+        untried = Memory(content="Use poetry", category=MemoryCategory.COMMAND)
+        for memory in (proven, discredited, untried):
+            await store.create(memory)
+        await store.close()
+        await self._as_schema_2(temp_db_path, {proven.id: 0.6, discredited.id: -0.6})
+
+        reopened = MemoryStorage(temp_db_path, pool_size=2, secure_permissions=False)
+        await reopened.initialize()
+        try:
+            got = {m.id: m for m in await reopened.get_many([proven.id, discredited.id, untried.id])}
+            assert (got[proven.id].worked, got[proven.id].failed) == pytest.approx((3.0, 0.0))
+            assert (got[discredited.id].worked, got[discredited.id].failed) == pytest.approx((0.0, 2.0))
+            assert got[proven.id].evidence_at == datetime.fromisoformat("2026-09-01T00:00:00+00:00")
+            assert (got[untried.id].worked, got[untried.id].failed, got[untried.id].evidence_at) == (
+                0.0, 0.0, None,
+            )
+        finally:
+            await reopened.close()
+
+    async def test_existing_counts_are_not_overwritten(self, temp_db_path: Path) -> None:
+        """A store whose version table was reset keeps the counts it has."""
+        store = MemoryStorage(temp_db_path, pool_size=2, secure_permissions=False)
+        await store.initialize()
+        memory = Memory(content="Use uv", category=MemoryCategory.COMMAND)
+        await store.create(memory)
+        await store.record_outcome(memory.id, Outcome.WORKED, model=OutcomeModel())
+        await store.close()
+        async with aiosqlite.connect(temp_db_path) as conn:
+            await conn.execute("DELETE FROM schema_version")
+            await conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (2, '2026-09-01T00:00:00')"
+            )
+            await conn.commit()
+
+        reopened = MemoryStorage(temp_db_path, pool_size=2, secure_permissions=False)
+        await reopened.initialize()
+        try:
+            assert (await reopened.get(memory.id)).worked == 1.0
         finally:
             await reopened.close()

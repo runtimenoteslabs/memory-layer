@@ -183,6 +183,7 @@ def _recall(provider: RuntimeMemoryProvider, args: dict[str, Any]) -> dict[str, 
 
     limit = args.get("limit") or 10
     results = provider.recall(query=query, limit=int(limit), category=category)
+    contradicts = provider.contradictions([r.memory.id for r in results])
     return {
         "count": len(results),
         "memories": [
@@ -192,6 +193,9 @@ def _recall(provider: RuntimeMemoryProvider, args: dict[str, Any]) -> dict[str, 
                 "category": r.memory.category.value,
                 "score": round(r.score, 3),
                 "outcome_score": round(r.memory.outcome_score, 3),
+                "worked": round(r.memory.worked, 2),
+                "failed": round(r.memory.failed, 2),
+                "contradicts": contradicts.get(r.memory.id, []),
             }
             for r in results
         ],
@@ -217,7 +221,13 @@ def _outcome(provider: RuntimeMemoryProvider, args: dict[str, Any]) -> dict[str,
         "recorded": True,
         "outcome": outcome.value,
         "updated": [
-            {"id": memory.id, "outcome_score": round(memory.outcome_score, 3)} for memory in updated
+            {
+                "id": memory.id,
+                "outcome_score": round(memory.outcome_score, 3),
+                "worked": round(memory.worked, 2),
+                "failed": round(memory.failed, 2),
+            }
+            for memory in updated
         ],
     }
 

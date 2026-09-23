@@ -223,7 +223,17 @@ class Memory:
     """Unique identifier (UUID)."""
 
     outcome_score: float = 0.0
-    """Accumulated outcome score (-1.0 to 1.0)."""
+    """Outcome score (-1.0 to 1.0) as of the last outcome recorded. Since 4.0.0
+    it is derived from ``worked`` and ``failed``; see ``core.outcomes``."""
+
+    worked: float = 0.0
+    """Times the memory worked, decayed to ``evidence_at``."""
+
+    failed: float = 0.0
+    """Times the memory failed, decayed to ``evidence_at``."""
+
+    evidence_at: datetime | None = None
+    """When ``worked`` and ``failed`` were last brought up to date."""
 
     confidence: float = 1.0
     """Source reliability (0.0 to 1.0)."""
@@ -298,6 +308,9 @@ class Memory:
             "content": self.content,
             "category": self.category.value,
             "outcome_score": self.outcome_score,
+            "worked": self.worked,
+            "failed": self.failed,
+            "evidence_at": self.evidence_at.isoformat() if self.evidence_at else None,
             "confidence": self.confidence,
             "importance": self.importance,
             "use_count": self.use_count,
@@ -354,11 +367,18 @@ class Memory:
         if isinstance(source, str):
             source = MemorySource(source)
 
+        evidence_at = data.get("evidence_at")
+        if isinstance(evidence_at, str):
+            evidence_at = datetime.fromisoformat(evidence_at)
+
         return cls(
             id=data.get("id", generate_id()),
             content=data["content"],
             category=category,
             outcome_score=data.get("outcome_score", 0.0),
+            worked=data.get("worked", 0.0),
+            failed=data.get("failed", 0.0),
+            evidence_at=evidence_at,
             confidence=data.get("confidence", 1.0),
             importance=data.get("importance", 0.5),
             use_count=data.get("use_count", 0),

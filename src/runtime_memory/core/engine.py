@@ -85,17 +85,17 @@ class EngineConfig:
     """Outcome score threshold below which memories are archived."""
 
     # Counterpart credit
-    counterpart_credit: float = 0.05
-    """How much a memory gains when a memory it conflicts with is recorded as
-    having failed. 0.0 turns it off.
+    counterpart_credit: float = 0.25
+    """How many successes a memory is credited with when a memory it conflicts
+    with is recorded as having failed. 0.0 turns it off.
 
     A contract that credits only what was acted on leaves the memory that was
     right about the same thing with nothing: it was not followed, so it earns
     nothing, while memories that were followed rise past it. The Tier 2
     evaluation watched a correct memory fall out of retrieval that way, after
     which the rule it spoke to broke on 8 of the next 10 tasks. The credit is
-    small because a conflict is evidence about the pair, not a demonstration
-    that this memory works."""
+    small, a quarter of a success, because a conflict is evidence about the
+    pair, not a demonstration that this memory works."""
 
     auto_archive_on_search: bool = False
     """Whether to run auto-archival after searches (can impact performance)."""
@@ -791,7 +791,9 @@ class MemoryEngine:
         if isinstance(memory_ids, str):
             memory_ids = [memory_ids]
 
-        memories = await self._storage.record_outcomes(memory_ids, outcome)
+        memories = await self._storage.record_outcomes(
+            memory_ids, outcome, model=self._retriever.config.outcome_model
+        )
 
         # Update memories in retriever
         for memory in memories:
@@ -830,8 +832,10 @@ class MemoryEngine:
         if not counterparts:
             return []
 
-        credited = await self._storage.adjust_outcome_scores(
-            list(counterparts), self.config.counterpart_credit
+        credited = await self._storage.add_evidence(
+            list(counterparts),
+            worked=self.config.counterpart_credit,
+            model=self._retriever.config.outcome_model,
         )
         for memory in credited:
             self._retriever.update_memory(memory, memory.embedding)

@@ -24,7 +24,7 @@ from runtime_memory.core.models import (
     Outcome,
     SearchResult,
 )
-from runtime_memory.core.retrieval import HybridRetriever
+from runtime_memory.core.retrieval import HybridRetriever, RetrievalConfig
 from runtime_memory.core.storage import MemoryNotFoundError, MemoryStorage
 
 
@@ -571,7 +571,9 @@ class TestOutcomeOperations:
         assert memory.outcome_score == 0.0
 
         updated = await engine.record_outcome(memory.id, Outcome.WORKED)
-        assert updated[0].outcome_score == 0.2
+        # One success over the prior of two: 1 / (1 + 2).
+        assert (updated[0].worked, updated[0].failed) == (1.0, 0.0)
+        assert updated[0].outcome_score == pytest.approx(1 / 3)
 
     async def test_record_outcome_multiple(self, engine: MemoryEngine) -> None:
         """Test recording outcome for multiple memories."""
@@ -583,7 +585,7 @@ class TestOutcomeOperations:
 
         updated = await engine.record_outcome(ids, Outcome.WORKED)
         assert len(updated) == 3
-        assert all(m.outcome_score == 0.2 for m in updated)
+        assert all(m.worked == 1.0 and m.outcome_score == pytest.approx(1 / 3) for m in updated)
 
     async def test_record_outcome_failed(self, engine: MemoryEngine) -> None:
         """Test recording failed outcome."""
@@ -592,7 +594,9 @@ class TestOutcomeOperations:
             category=MemoryCategory.PATTERN,
         )
         updated = await engine.record_outcome(memory.id, Outcome.FAILED)
-        assert updated[0].outcome_score == -0.3
+        # A failure weighs 1.5 successes: -1.5 / (1.5 + 2).
+        assert (updated[0].worked, updated[0].failed) == (0.0, 1.0)
+        assert updated[0].outcome_score == pytest.approx(-1.5 / 3.5)
 
     async def test_record_outcome_partial(self, engine: MemoryEngine) -> None:
         """Test recording partial outcome."""
@@ -601,7 +605,32 @@ class TestOutcomeOperations:
             category=MemoryCategory.PATTERN,
         )
         updated = await engine.record_outcome(memory.id, Outcome.PARTIAL)
-        assert updated[0].outcome_score == 0.05
+        # A quarter of a success: 0.25 / (0.25 + 2).
+        assert updated[0].worked == 0.25
+        assert updated[0].outcome_score == pytest.approx(0.25 / 2.25)
+
+    async def test_3x_scoring_keeps_the_fixed_steps(
+        self, temp_db_path: Path, mock_embedding_provider: MockEmbeddingProvider
+    ) -> None:
+        """With legacy_3x the score steps as before; the counts are kept anyway."""
+        engine = MemoryEngine(
+            config=EngineConfig(
+                db_path=temp_db_path, secure_permissions=False, embedding_provider="mock",
+                retrieval_config=RetrievalConfig.legacy_3x(),
+            ),
+            embedding_provider=mock_embedding_provider,
+        )
+        await engine.initialize()
+        try:
+            memory = await engine.add(content="Test", category=MemoryCategory.PATTERN)
+            steps = []
+            for outcome in (Outcome.WORKED, Outcome.FAILED, Outcome.PARTIAL):
+                (updated,) = await engine.record_outcome(memory.id, outcome)
+                steps.append(round(updated.outcome_score, 4))
+            assert steps == [0.2, -0.1, -0.05]
+            assert (updated.worked, updated.failed) == pytest.approx((1.25, 1.0))
+        finally:
+            await engine.close()
 
     async def test_record_outcome_for_last_search(self, engine: MemoryEngine) -> None:
         """Test recording outcome for last search results."""

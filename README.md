@@ -6,7 +6,7 @@ Persistent memory for AI coding agents with outcome-based learning.
 
 ## What It Does
 
-Runtime Memory stores knowledge from your coding sessions and learns which memories actually help. When advice works, it gets boosted (+0.2). When it fails, it gets penalized (-0.3). Over time, good memories rise to the top.
+Runtime Memory stores knowledge from your coding sessions and learns which memories actually help. Each memory keeps a record of how often it worked and how often it failed. Advice that keeps working ranks higher, advice that keeps failing stops being retrieved, and old evidence fades.
 
 ## Installation
 
@@ -301,13 +301,22 @@ mem serve --rest --port 8080
 
 ## Outcome Scoring
 
-| Outcome | Score Change | When to Use |
-|---------|--------------|-------------|
-| `worked` | +0.2 | Advice solved the problem |
-| `failed` | -0.3 | Advice was wrong or unhelpful |
-| `partial` | +0.05 | Advice was on the right track |
+| Outcome | Adds | When to Use |
+|---------|------|-------------|
+| `worked` | one success | Advice solved the problem |
+| `failed` | one failure | Advice was wrong or unhelpful |
+| `partial` | a quarter of a success | Advice was on the right track |
 
-The asymmetric scoring is intentional: bad advice wastes debugging time and erodes trust, so it's penalized more heavily.
+A memory's outcome score is `(worked - 1.5 x failed) / (worked + 1.5 x failed + 2)`,
+between -1 and 1. One success gives 0.33 and ten give 0.83, so a single
+observation counts for less than a settled record. A failure weighs 1.5
+successes, because bad advice wastes debugging time and erodes trust. Every
+count halves over 90 days, so a record from last year fades.
+
+A memory whose score reads -0.5 or worse, two failures and no successes, is not
+retrieved until its failures fade. One failure is not enough, since it may have
+been blamed on the wrong memory. See `RetrievalConfig.failure_gate` and
+`core/outcomes.py` to change any of this.
 
 ## How Retrieval Works
 

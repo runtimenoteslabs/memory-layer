@@ -187,18 +187,21 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
 
 2. **Retrieval**: When you ask questions, relevant memories are automatically searched using a hybrid approach:
    - Semantic similarity (what you're asking about)
-   - Outcome scores (what actually helped before)
+   - Outcome record (what actually helped before)
    - Recency (recent memories weighted higher)
-   - Usage frequency (popular memories rise)
+   - Extraction confidence
 
 3. **Relevance first**: A search keeps the memories most relevant to your query and drops the rest, then ranks those on outcome, confidence and age. A memory that does not match your query is not returned, whatever its record.
 
-4. **Learning**: Each memory has a score starting at 0.0
-   - "worked" → +0.2 (max 1.0)
-   - "failed" → -0.3 (min -1.0)
-   - "partial" → +0.05
+4. **Learning**: Each memory counts how often it worked and how often it failed
+   - "worked" adds a success
+   - "failed" adds a failure, which weighs 1.5 successes
+   - "partial" adds a quarter of a success
 
-   Higher-scored memories appear first in search results. Over time, good advice rises and bad advice sinks.
+   The counts give a score between -1 and 1, and a single observation counts for
+   less than a settled record. Memories with a better record rank higher among
+   relevant ones, a memory that failed twice with no successes is not retrieved,
+   and counts halve over 90 days so old evidence fades.
 
 5. **Privacy**: Everything stays on your machine. No data is sent anywhere.
 
@@ -244,7 +247,7 @@ Runtime Memory integrates with task trackers to automatically learn from task ou
 
 ```
 Task completed
-    → Memories used during this task get +0.2 boost
+    → Memories used during this task are credited with a success
     → Good advice rises to the top over time
 ```
 
@@ -279,11 +282,11 @@ mem beads-link <memory_id>
 
 ### What Gets Recorded
 
-| Task Status | Memory Outcome | Score Change |
-|-------------|----------------|--------------|
-| completed/done | worked | +0.2 |
-| cancelled | failed (if enabled) | -0.3 |
-| blocked | partial | +0.05 |
+| Task Status | Memory Outcome | Adds |
+|-------------|----------------|------|
+| completed/done | worked | one success |
+| cancelled | failed (if enabled) | one failure |
+| blocked | partial | a quarter of a success |
 
 ### Environment Variables
 

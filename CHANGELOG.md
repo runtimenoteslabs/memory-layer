@@ -43,6 +43,31 @@ stated below with what it was measured against.
   sessions went from 0.982 to 0.988; what changes is how much relevance counts
   against the other signals. `min_vector_similarity` applies to fixed scaling
   only.
+- **Outcomes are kept as evidence, not a running score.** Each memory counts the
+  times it worked and the times it failed (`worked`, `failed`, schema 3), and
+  every count halves over 90 days. Its outcome score is
+  `(worked - 1.5 x failed) / (worked + 1.5 x failed + 2)`, read at search time so
+  old evidence fades between outcomes. 3.x moved the score +0.2, -0.3 or +0.05
+  per outcome and clamped it to [-1, 1]: one observation read like a settled
+  record, nothing aged, and a memory at the floor lost nothing from another
+  failure. Now one success scores 0.33 and ten score 0.83, and a failure still
+  weighs 1.5 successes. `core.outcomes.OutcomeModel` holds the parameters, as
+  `RetrievalConfig.outcome_model`; `legacy_3x()` sets it to None, which keeps
+  the 3.x steps.
+- **A memory that keeps failing is not retrieved** (`RetrievalConfig.failure_gate`,
+  -0.5). Once relevance is scaled to the query's best match, a lead in relevance
+  outweighs any outcome record, so ranking alone would keep injecting a memory
+  the query matches best however often it failed. Two failures and no successes
+  read -0.6 and gate it; one failure, which may have been blamed on the wrong
+  memory, does not. As the failures decay the memory can be retrieved again.
+  The gate is off with outcome weight 0, so an arm that switches outcome
+  learning off switches it off too, and in `legacy_3x()`.
+- **The Hermes block shows a memory's record as counts,** "worked 2 times,
+  failed 1 time", where it said "has worked before" for one observation and
+  ten alike. The recall trace and the recall and outcome tools report the
+  counts as well.
+- **`EngineConfig.counterpart_credit` is in successes:** 0.25, a quarter of one,
+  where it was 0.05 of score.
 - **A retrieval no longer moves `updated_at`.** Reading a memory is not a change
   to it, and while recency decayed from that field every retrieval made a memory
   look newly written.
@@ -106,6 +131,16 @@ stated below with what it was measured against.
   similarity threshold cannot tell a restatement from a contradiction.
   Confirmations from extraction land in the same place, and the Hermes trace
   records them as their own `confirm` event. Nothing ranks on them yet.
+- **The Hermes block shows contradictions.** Two recalled memories stored as
+  contradicting each other are both marked, each naming the other, and the
+  block asks the model to check which holds before relying on either. A
+  recalled memory that contradicts one not recalled brings that one in under
+  the recall, up to `RUNTIME_MEMORY_CONFLICT_COUNTERPARTS` (3), so a contested
+  memory never arrives alone looking settled. Ranking alone did not keep the
+  right side of a contradiction in the prompt: the Tier 2 evaluation watched a
+  correct memory drop out while the wrong one it contradicted stayed. The
+  recall trace records the counterparts added and the marks shown, and
+  `runtimememory_recall` lists each result's contradictions.
 
 ### Fixed
 
@@ -114,6 +149,14 @@ stated below with what it was measured against.
   1.5x boost for troubleshooting memories on an error-shaped query never
   happened. The docs now say what retrieval does.
 - **The Hermes guide still described the relevance pool as off by default.**
+- **The Hermes guide said an outcome without ids scores the whole recall,** which
+  4.0 declines.
+- **Extraction failed whenever the model began its answer with a thinking
+  block.** Claude 5 models think by default, and the response was read from its
+  first block, so such a response failed the whole extraction with
+  `'ThinkingBlock' object has no attribute 'text'`. The conflict classifier went
+  through the same call. The answer is now read from the text blocks, and a
+  refusal is reported as a failed extraction.
 
 ### Migration
 
@@ -122,6 +165,12 @@ stated below with what it was measured against.
 - Callers of `record_outcome` that relied on the no-ids default must pass the ids
   the outcome is about. The provider's recall results and the injected block both
   carry them.
+- Stores migrate to schema 3 on open. A stored 3.x score becomes the counts it
+  stands for, +0.2 per success and -0.3 per failure, dated from the memory's
+  last update. The stored score is left as it was until the next outcome, but
+  ranking reads the counts.
+- Code that asserted exact outcome scores after `record_outcome` will see the
+  new values; `legacy_3x()` keeps the old ones.
 
 ## [3.1.0] - 2026-09-17
 

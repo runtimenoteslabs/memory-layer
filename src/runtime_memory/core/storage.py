@@ -35,9 +35,10 @@ from runtime_memory.core.models import (
     Relationship,
     RelationType,
 )
+from runtime_memory.core.outcomes import EVIDENCE_OF, OutcomeModel
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
 # Type alias to avoid conflict with the list() method
 _List = builtins.list
@@ -45,7 +46,7 @@ _List = builtins.list
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # SQL statements for schema creation
 SCHEMA_SQL = """
@@ -133,7 +134,38 @@ END;
 """
 
 # Migration SQL statements (version -> SQL)
-MIGRATIONS: dict[int, str] = {
+async def _add_outcome_evidence(conn: aiosqlite.Connection) -> None:
+    """Schema 3: decayed counts of the times a memory worked and failed.
+
+    Written as a step rather than a script because SQLite cannot add a column
+    only if it is missing, and a store whose version table was reset would
+    otherwise fail to open on the duplicate. Stored scores become the counts
+    they stand for (see ``core.outcomes.pseudo_counts``, which this mirrors),
+    but only when the columns are new, so real counts are never overwritten.
+    """
+    cursor = await conn.execute("PRAGMA table_info(memories)")
+    present = {row[1] for row in await cursor.fetchall()}
+    added = False
+    for column, ddl in (
+        ("worked", "REAL DEFAULT 0.0"),
+        ("failed", "REAL DEFAULT 0.0"),
+        ("evidence_at", "TEXT"),
+    ):
+        if column not in present:
+            await conn.execute(f"ALTER TABLE memories ADD COLUMN {column} {ddl}")
+            added = True
+    if added:
+        await conn.execute(
+            """
+            UPDATE memories SET
+                worked = CASE WHEN outcome_score > 0 THEN outcome_score / 0.2 ELSE 0.0 END,
+                failed = CASE WHEN outcome_score < 0 THEN -outcome_score / 0.3 ELSE 0.0 END,
+                evidence_at = CASE WHEN outcome_score != 0 THEN updated_at ELSE NULL END
+            """
+        )
+
+
+MIGRATIONS: dict[int, str | Callable[[aiosqlite.Connection], Awaitable[None]]] = {
     2: """
         CREATE TABLE IF NOT EXISTS memory_relations (
             source_id TEXT NOT NULL,
@@ -147,6 +179,9 @@ MIGRATIONS: dict[int, str] = {
         CREATE INDEX IF NOT EXISTS idx_relations_source ON memory_relations(source_id);
         CREATE INDEX IF NOT EXISTS idx_relations_target ON memory_relations(target_id);
     """,
+    # Outcome evidence. Not in SCHEMA_SQL: a new store runs every migration after
+    # creating the table, so this is where every store gains the columns.
+    3: _add_outcome_evidence,
 }
 
 
@@ -301,7 +336,11 @@ class MemoryStorage:
         for version in sorted(MIGRATIONS.keys()):
             if version > current_version:
                 logger.info(f"Applying migration {version}")
-                await conn.executescript(MIGRATIONS[version])
+                migration = MIGRATIONS[version]
+                if callable(migration):
+                    await migration(conn)
+                else:
+                    await conn.executescript(migration)
                 await conn.execute(
                     "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                     (version, datetime.now(UTC).isoformat()),
@@ -385,16 +424,20 @@ class MemoryStorage:
         """
         sql = """
             INSERT INTO memories (
-                id, content, category, outcome_score, confidence, importance,
+                id, content, category, outcome_score, worked, failed, evidence_at,
+                confidence, importance,
                 use_count, project, scope, source, tags, entities, supersedes,
                 archived, created_at, updated_at, embedding, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         params = (
             memory.id,
             memory.content,
             memory.category.value,
             memory.outcome_score,
+            memory.worked,
+            memory.failed,
+            memory.evidence_at.isoformat() if memory.evidence_at else None,
             memory.confidence,
             memory.importance,
             memory.use_count,
@@ -488,7 +531,8 @@ class MemoryStorage:
 
         sql = """
             UPDATE memories SET
-                content = ?, category = ?, outcome_score = ?, confidence = ?,
+                content = ?, category = ?, outcome_score = ?, worked = ?, failed = ?,
+                evidence_at = ?, confidence = ?,
                 importance = ?, use_count = ?, project = ?, scope = ?, source = ?,
                 tags = ?, entities = ?, supersedes = ?, archived = ?,
                 updated_at = ?, embedding = ?, metadata = ?
@@ -498,6 +542,9 @@ class MemoryStorage:
             memory.content,
             memory.category.value,
             memory.outcome_score,
+            memory.worked,
+            memory.failed,
+            memory.evidence_at.isoformat() if memory.evidence_at else None,
             memory.confidence,
             memory.importance,
             memory.use_count,
@@ -790,72 +837,94 @@ class MemoryStorage:
         memory_id: str,
         outcome: Outcome,
         conn: aiosqlite.Connection | None = None,
+        model: OutcomeModel | None = None,
     ) -> Memory:
         """Record an outcome for a memory.
 
-        Updates the outcome_score with clamping to [-1.0, 1.0].
+        Adds the outcome to the memory's worked and failed counts, decayed to now,
+        and sets its outcome score from them under ``model``. With no model the
+        score takes the 3.x step instead (+0.2 worked, -0.3 failed, +0.05 partial,
+        clamped to [-1, 1]); the counts are kept either way.
 
         Args:
             memory_id: Memory ID.
             outcome: Outcome to record.
             conn: Optional connection for transaction.
+            model: How evidence becomes a score, or None for the 3.x step.
 
         Returns:
             Updated memory.
         """
-        memory = await self.get(memory_id)
-        adjustment = OUTCOME_SCORE_ADJUSTMENTS[outcome]
-        new_score = max(-1.0, min(1.0, memory.outcome_score + adjustment))
-
-        sql = """
-            UPDATE memories
-            SET outcome_score = ?, updated_at = ?
-            WHERE id = ?
-        """
-        params = (new_score, datetime.now(UTC).isoformat(), memory_id)
-
-        if conn:
-            await conn.execute(sql, params)
-        else:
-            async with self._get_connection() as c:
-                await c.execute(sql, params)
-                await c.commit()
-
-        memory.outcome_score = new_score
-        memory.updated_at = datetime.now(UTC)
-        logger.debug(f"Recorded {outcome.value} for memory {memory_id}, score: {new_score}")
+        worked, failed = EVIDENCE_OF[outcome]
+        legacy = None if model else OUTCOME_SCORE_ADJUSTMENTS[outcome]
+        (memory,) = await self._add_evidence([memory_id], worked, failed, model, legacy, conn)
+        logger.debug(
+            f"Recorded {outcome.value} for memory {memory_id}: worked {memory.worked:.2f}, "
+            f"failed {memory.failed:.2f}, score {memory.outcome_score:.3f}"
+        )
         return memory
 
-    async def adjust_outcome_scores(
+    async def add_evidence(
         self,
         memory_ids: _List[str],
-        delta: float,
+        worked: float,
+        failed: float = 0.0,
+        model: OutcomeModel | None = None,
     ) -> _List[Memory]:
-        """Move several memories' outcome scores by a fixed amount, clamped.
+        """Add observations to several memories that are not an outcome of their own.
 
-        Used for credit that is not an outcome of its own, such as the counterpart
-        of a memory that failed. It is recorded against the memories named and
-        nothing else.
+        Used for credit such as the counterpart of a memory that failed. It is
+        recorded against the memories named and nothing else.
 
         Args:
             memory_ids: Memory IDs.
-            delta: Amount to add, positive or negative.
+            worked: Successes to add to each.
+            failed: Failures to add to each.
+            model: How evidence becomes a score, or None for the 3.x step, under
+                which ``worked`` moves the score 0.2 per success and ``failed``
+                0.3 per failure.
 
         Returns:
             The updated memories, in the order given.
         """
-        updated: _List[Memory] = []
+        legacy = None if model else 0.2 * worked - 0.3 * failed
         async with self.transaction() as conn:
-            for memory_id in memory_ids:
-                memory = await self.get(memory_id)
-                new_score = max(-1.0, min(1.0, memory.outcome_score + delta))
-                await conn.execute(
-                    "UPDATE memories SET outcome_score = ?, updated_at = ? WHERE id = ?",
-                    (new_score, datetime.now(UTC).isoformat(), memory_id),
-                )
-                memory.outcome_score = new_score
-                memory.updated_at = datetime.now(UTC)
-                updated.append(memory)
+            return await self._add_evidence(memory_ids, worked, failed, model, legacy, conn)
+
+    async def _add_evidence(
+        self,
+        memory_ids: _List[str],
+        worked: float,
+        failed: float,
+        model: OutcomeModel | None,
+        legacy_step: float | None,
+        conn: aiosqlite.Connection | None,
+    ) -> _List[Memory]:
+        """Bring each memory's counts up to date, add to them, and rescore it."""
+        now = datetime.now(UTC)
+        counts = model or OutcomeModel()
+        updated: _List[Memory] = []
+        for memory_id in memory_ids:
+            memory = await self.get(memory_id)
+            new_worked, new_failed, score = counts.add(memory, worked, failed, now)
+            if legacy_step is not None:
+                score = max(-1.0, min(1.0, memory.outcome_score + legacy_step))
+            sql = """
+                UPDATE memories
+                SET outcome_score = ?, worked = ?, failed = ?, evidence_at = ?, updated_at = ?
+                WHERE id = ?
+            """
+            params = (score, new_worked, new_failed, now.isoformat(), now.isoformat(), memory_id)
+            if conn:
+                await conn.execute(sql, params)
+            else:
+                async with self._get_connection() as c:
+                    await c.execute(sql, params)
+                    await c.commit()
+            memory.outcome_score = score
+            memory.worked, memory.failed, memory.evidence_at = new_worked, new_failed, now
+            memory.updated_at = now
+            updated.append(memory)
         return updated
 
     # =========================================================================
@@ -949,12 +1018,14 @@ class MemoryStorage:
         self,
         memory_ids: _List[str],
         outcome: Outcome,
+        model: OutcomeModel | None = None,
     ) -> _List[Memory]:
         """Record an outcome for multiple memories.
 
         Args:
             memory_ids: Memory IDs.
             outcome: Outcome to record.
+            model: How evidence becomes a score, or None for the 3.x step.
 
         Returns:
             List of updated memories.
@@ -962,7 +1033,7 @@ class MemoryStorage:
         async with self.transaction() as conn:
             memories = []
             for memory_id in memory_ids:
-                memory = await self.record_outcome(memory_id, outcome, conn=conn)
+                memory = await self.record_outcome(memory_id, outcome, conn=conn, model=model)
                 memories.append(memory)
             return memories
 
@@ -1244,6 +1315,9 @@ class MemoryStorage:
             content=row["content"],
             category=MemoryCategory(row["category"]),
             outcome_score=row["outcome_score"],
+            worked=row["worked"] or 0.0,
+            failed=row["failed"] or 0.0,
+            evidence_at=datetime.fromisoformat(row["evidence_at"]) if row["evidence_at"] else None,
             confidence=row["confidence"],
             importance=row["importance"],
             use_count=row["use_count"],

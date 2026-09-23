@@ -63,6 +63,7 @@ beyond the provider name.
 | `RUNTIME_MEMORY_RECALL_LIMIT` | `8` | Memories injected per turn |
 | `RUNTIME_MEMORY_MIN_SCORE` | `0.0` | Floor on the combined score for injection |
 | `RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR` | `2` | Two-stage recall, see below |
+| `RUNTIME_MEMORY_CONFLICT_COUNTERPARTS` | `3` | Contradicting memories added beside a recall, see Outcome feedback |
 | `RUNTIME_MEMORY_PROJECT` | workspace name | Project scope for memories |
 | `RUNTIME_MEMORY_MIRROR_WRITES` | `true` | Mirror built-in memory writes |
 | `RUNTIME_MEMORY_EXTRACT_ON_END` | `false` | Extract memories at session end |
@@ -106,26 +107,51 @@ which would bury the curated memories that retrieval depends on.
 - **Mirrored built-in writes.** When Hermes writes to its own note file, the same
   fact also lands in the store. Hermes keeps its small file for always-on
   context, and the store keeps the full history.
-- **End-of-session extraction**, off by default. It runs an LLM pass over the
-  finished session and costs API calls.
+- **End-of-session extraction**, off by default. It runs one LLM call over the
+  finished session, which is shown the project's stored memories: it leaves out
+  what they already say, counts the ones the session confirmed, and records
+  which stored memory a new one updates, contradicts, or extends.
 
 Subagent, cron, and flush contexts read the store but never write to it, so
 background runs cannot fill it with duplicates.
 
 ## Outcome feedback
 
-A memory that worked scores +0.2, one that failed -0.3, and one that partly
-helped +0.05. Failures weigh more than successes, so a memory that misleads once
-needs several successes to recover its ranking.
+Each memory counts the times it worked and the times it failed; `partial` adds a
+quarter of a success. A failure weighs 1.5 successes, so a memory that misleads
+once needs more than one success to read as reliable again. Counts halve over 90
+days. A memory that failed twice with no successes is not recalled until its
+failures fade.
 
-Injected memories carry their id and their track record, so the model can cite a
-specific memory and can see that it has failed before. Calling
-`runtimememory_outcome` with no ids scores whatever was recalled for that turn.
+Injected memories carry their id and their record, as counts, so the model can
+cite a specific memory and can see how much evidence there is:
+
+```
+- [workaround] Delete the lockfile (worked 2 times, failed 1 time) `9a9f`
+```
+
+`runtimememory_outcome` needs the ids of the memories the outcome is about; a
+call without them is declined, and the trace records it as such.
+
+Two memories stored as contradicting each other are marked in the block, each
+naming the other, with a line asking the model to check which holds before
+relying on either. When a recalled memory contradicts one that was not recalled,
+that one is added under the recall, up to `RUNTIME_MEMORY_CONFLICT_COUNTERPARTS`,
+so a contested memory never arrives looking settled:
+
+```
+- [convention] Amounts are float, rounded to cents `9a9f` (contradicts `c21e`)
+
+Also stored, and contradicting a memory above:
+- [convention] Amounts are Decimal, never float `c21e` (contradicts `9a9f`)
+```
+
+`runtimememory_recall` lists the same links in each result's `contradicts`.
 
 ## Evaluation trace
 
 Setting `RUNTIME_MEMORY_HERMES_TRACE` writes one JSONL record per recall, write,
-and outcome:
+confirmation, and outcome:
 
 ```bash
 export RUNTIME_MEMORY_HERMES_TRACE=~/traces/hermes-run.jsonl
@@ -136,10 +162,16 @@ per turn, which memories were injected and whether they helped.
 
 ```json
 {"event": "recall", "turn_id": "a1b2", "query": "how do I run the tests?",
- "retrieved": [{"memory_id": "9a9f", "score": 0.82, "outcome_score": 0.2}]}
+ "retrieved": [{"memory_id": "9a9f", "score": 0.82, "outcome_score": 0.33,
+                "worked": 1.0, "failed": 0.0}]}
 {"event": "outcome", "turn_id": "a1b2", "outcome": "worked",
  "memory_ids": ["9a9f"], "origin": "auto"}
 ```
+
+A recall also records its `search_mode` (`hybrid` or `keyword`), any
+`counterparts` added beside it, and the `contradicts` marks shown. A `confirm`
+record lists stored memories an extraction learned again instead of storing
+again.
 
 Tracing stays off until the variable is set, and a failed trace write never
 breaks a turn.

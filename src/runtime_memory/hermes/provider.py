@@ -28,6 +28,7 @@ import os
 import sys
 import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +38,7 @@ from runtime_memory.core.models import (
     MemoryScope,
     MemorySource,
     Outcome,
+    RelationType,
 )
 from runtime_memory.core.paths import default_db_path
 from runtime_memory.core.retrieval import RetrievalConfig
@@ -59,6 +61,8 @@ PROVIDER_NAME = "runtimememory"
 PROVIDER_LABEL = "Runtime Memory"
 
 DEFAULT_RECALL_LIMIT = 8
+DEFAULT_CONFLICT_COUNTERPARTS = 3
+"""Stored memories shown beside the recall because they contradict one in it."""
 DEFAULT_MIN_SCORE = 0.0
 EXTRACTION_TIMEOUT = 180.0
 """Seconds to wait for session-end extraction. It is one LLM round trip."""
@@ -154,6 +158,9 @@ class RuntimeMemoryProvider(MemoryProvider):
             os.environ.get("RUNTIME_MEMORY_RECALL_LIMIT", DEFAULT_RECALL_LIMIT)
         )
         self._min_score: float = float(os.environ.get("RUNTIME_MEMORY_MIN_SCORE", DEFAULT_MIN_SCORE))
+        self._conflict_counterparts: int = int(
+            os.environ.get("RUNTIME_MEMORY_CONFLICT_COUNTERPARTS", DEFAULT_CONFLICT_COUNTERPARTS)
+        )
         self._mirror_builtin: bool = _env_flag("RUNTIME_MEMORY_MIRROR_WRITES", True)
         self._extract_on_end: bool = _env_flag("RUNTIME_MEMORY_EXTRACT_ON_END", False)
 
@@ -331,8 +338,9 @@ class RuntimeMemoryProvider(MemoryProvider):
             logger.warning(f"Recall failed: {exc}")
             return ""
 
-        self._last_ids = [r.memory.id for r in results]
-        self._last_count = len(results)
+        contradicts, counterparts = self._conflicts_shown(results)
+        self._last_ids = [r.memory.id for r in results] + [m.id for m in counterparts]
+        self._last_count = len(self._last_ids)
 
         # Traced even when nothing came back. A recall that found nothing and a
         # recall that never happened look identical in an untraced run, and the
@@ -345,11 +353,76 @@ class RuntimeMemoryProvider(MemoryProvider):
             project=self._project,
             latency_ms=(time.perf_counter() - started) * 1000,
             search_mode=self._engine.search_mode,
+            counterparts=[m.id for m in counterparts],
+            contradicts=contradicts,
         )
 
         if not results:
             return ""
-        return self._format(results)
+        return self._format(results, contradicts, counterparts)
+
+    def _conflicts_shown(
+        self, results: list[SearchResult]
+    ) -> tuple[dict[str, list[str]], list[Memory]]:
+        """Find the contradictions to show with a recall, and what to add for them.
+
+        A recalled memory that contradicts a stored one arrives with it: the
+        other side, if not recalled, is added, up to ``conflict_counterparts``.
+        A contested note shown alone reads as settled, and ranking alone has
+        not kept the right side of a contradiction in the prompt.
+
+        Args:
+            results: The recall.
+
+        Returns:
+            For each memory shown, the shown memories it contradicts; and the
+            counterparts added. Both empty if the lookup fails, which must not
+            cost the turn its recall.
+        """
+        try:
+            return run_sync(self._conflicts_for(results), timeout=5.0)
+        except Exception as exc:
+            logger.warning(f"Conflict lookup failed: {exc}")
+            return {}, []
+
+    async def _conflicts_for(
+        self, results: list[SearchResult]
+    ) -> tuple[dict[str, list[str]], list[Memory]]:
+        engine = self._require_engine()
+        recalled = [r.memory.id for r in results]
+        others = await self._contradicted_by(recalled)
+        wanted = list(dict.fromkeys(o for mid in recalled for o in others[mid] if o not in recalled))
+        counterparts = [
+            memory
+            for memory in await engine.get_many(wanted)
+            if not memory.archived and (self._project is None or memory.project == self._project)
+        ][: self._conflict_counterparts]
+
+        shown = set(recalled) | {m.id for m in counterparts}
+        contradicts: dict[str, list[str]] = {}
+        for mid in recalled:
+            for other in others[mid]:
+                if other not in shown:
+                    continue
+                # Each pair is marked from both sides, and a pair of recalled
+                # memories is reached from both, so each side is added once.
+                for one, two in ((mid, other), (other, mid)):
+                    marked = contradicts.setdefault(one, [])
+                    if two not in marked:
+                        marked.append(two)
+        return contradicts, counterparts
+
+    async def _contradicted_by(self, memory_ids: list[str]) -> dict[str, list[str]]:
+        """For each memory, the ids of the memories it is linked as contradicting."""
+        engine = self._require_engine()
+        found: dict[str, list[str]] = {}
+        for memory_id in memory_ids:
+            links = await engine.related(memory_id, RelationType.CONFLICTS_WITH)
+            found[memory_id] = list(dict.fromkeys(
+                link.target_id if link.source_id == memory_id else link.source_id
+                for link in links
+            ))
+        return found
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         """No-op. Recall is synchronous, so there is nothing to warm."""
@@ -364,25 +437,66 @@ class RuntimeMemoryProvider(MemoryProvider):
             glyph=INDICATOR_GLYPH,
         )
 
-    def _format(self, results: list[SearchResult]) -> str:
+    def _format(
+        self,
+        results: list[SearchResult],
+        contradicts: dict[str, list[str]] | None = None,
+        counterparts: list[Memory] | None = None,
+    ) -> str:
         """Render search results as a promptable block.
 
         Each line carries its memory id so the model can name specific memories
-        when reporting an outcome, and its outcome score so a memory with a poor
-        track record reads as weaker evidence than one that keeps working.
+        when reporting an outcome, and its outcome record so a memory with a poor
+        track record reads as weaker evidence than one that keeps working. Two
+        memories linked as contradicting each other are both marked, naming the
+        other, so the agent chooses between them knowingly rather than taking
+        whichever ranked higher.
         """
+        contradicts = contradicts or {}
         lines = ["## Relevant memories", ""]
-        for result in results:
-            memory = result.memory
-            # Thresholds are inclusive so a single recorded outcome is enough to
-            # show: one `worked` lands exactly on +0.2, one `failed` on -0.3.
-            marker = ""
-            if memory.outcome_score >= 0.2:
-                marker = " (has worked before)"
-            elif memory.outcome_score <= -0.2:
-                marker = " (has failed before)"
-            lines.append(f"- [{memory.category.value}] {memory.content}{marker} `{memory.id}`")
+        lines += [self._line(result.memory, contradicts) for result in results]
+        if counterparts:
+            lines += ["", "Also stored, and contradicting a memory above:"]
+            lines += [self._line(memory, contradicts) for memory in counterparts]
+        if any(contradicts.values()):
+            lines += [
+                "",
+                "Memories marked as contradicting each other disagree. Check which one "
+                "holds here before relying on either.",
+            ]
         return "\n".join(lines)
+
+    def _line(self, memory: Memory, contradicts: dict[str, list[str]]) -> str:
+        """One memory as a line of the block."""
+        others = contradicts.get(memory.id)
+        conflict = f" (contradicts {', '.join(f'`{o}`' for o in others)})" if others else ""
+        return (
+            f"- [{memory.category.value}] {memory.content}{self._record(memory)} "
+            f"`{memory.id}`{conflict}"
+        )
+
+    def _record(self, memory: Memory) -> str:
+        """A memory's outcome record as the model is shown it.
+
+        Counts, not a score: "worked 3 times" says how much evidence there is,
+        where "has worked before" read the same for one observation and ten.
+        """
+        model = self._engine.retriever.config.outcome_model if self._engine else None
+        if model is None:
+            # 3.x scoring keeps no counts worth showing. Thresholds are
+            # inclusive so one outcome shows: +0.2 worked, -0.3 failed.
+            if memory.outcome_score >= 0.2:
+                return " (has worked before)"
+            if memory.outcome_score <= -0.2:
+                return " (has failed before)"
+            return ""
+        worked, failed = (round(n) for n in model.evidence(memory, datetime.now(UTC)))
+        parts = [
+            f"{label} {n} {'time' if n == 1 else 'times'}"
+            for label, n in (("worked", worked), ("failed", failed))
+            if n >= 1
+        ]
+        return f" ({', '.join(parts)})" if parts else ""
 
     # -- writes --------------------------------------------------------------
 
@@ -561,6 +675,10 @@ class RuntimeMemoryProvider(MemoryProvider):
             if result.memory.id not in self._last_ids:
                 self._last_ids.append(result.memory.id)
         return results
+
+    def contradictions(self, memory_ids: list[str]) -> dict[str, list[str]]:
+        """For each memory, the ids of the stored memories it is linked as contradicting."""
+        return run_sync(self._contradicted_by(memory_ids))
 
     def record_outcome(
         self, *, outcome: Outcome, memory_ids: list[str] | None = None

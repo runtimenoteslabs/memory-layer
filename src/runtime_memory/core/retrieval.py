@@ -22,6 +22,7 @@ from typing import Any, ClassVar
 from runtime_memory.core.embeddings import EmbeddingProvider  # noqa: TC001
 from runtime_memory.core.logging import get_logger
 from runtime_memory.core.models import Memory, MemoryCategory, SearchResult
+from runtime_memory.core.outcomes import OutcomeModel
 
 logger = get_logger(__name__)
 
@@ -72,6 +73,24 @@ class RetrievalConfig:
     # The order by semantic score alone is the same either way; what changes is
     # how much it counts against the other signals.
     semantic_scaling: str = "relative"
+
+    # How a memory's outcome record becomes its outcome signal. Since 4.0.0 an
+    # OutcomeModel reads the decayed worked and failed counts at search time, so
+    # old evidence fades between outcomes and one observation counts for less
+    # than ten. None reads the stored outcome score, which is what 3.x ranked on.
+    outcome_model: OutcomeModel | None = field(default_factory=OutcomeModel)
+
+    # A memory whose outcome record reads this or worse is not retrieved. Under
+    # the default model that is two failures and no successes: one failure, at
+    # -0.43, may be a misattribution and does not gate. Ranking alone cannot
+    # drop such a memory once relevance is scaled to the query's best match,
+    # because a lead in relevance outweighs any outcome record, so a memory the
+    # query matches best would keep being injected however often it failed. As
+    # its failures decay the record climbs back past the gate and the memory
+    # can be retrieved again. None turns the gate off; it applies only with an
+    # outcome_model and an outcome_weight above zero, so an evaluation arm that
+    # sets the weight to 0 to switch outcome learning off switches this off too.
+    failure_gate: float | None = -0.5
 
     # Recency decay parameters
     recency_half_life_days: float = 30.0  # Half-life for recency decay
@@ -159,6 +178,8 @@ class RetrievalConfig:
             "relevance_pool_factor": None,
             "recency_from_created": False,
             "semantic_scaling": "fixed",
+            "outcome_model": None,
+            "failure_gate": None,
             "category_boosts": {
                 MemoryCategory.GOTCHA: 1.3,
                 MemoryCategory.TROUBLESHOOTING: 1.2,
@@ -549,6 +570,16 @@ class HybridRetriever:
             include_archived=include_archived,
         )
 
+        # See RetrievalConfig.failure_gate. Gated before relevance is decided, so
+        # the next most relevant memory takes the gated one's place in the pool.
+        # Outcome weight 0 means outcome learning is off, so the gate is off too.
+        if (
+            self.config.failure_gate is not None
+            and self.config.outcome_model is not None
+            and self.config.outcome_weight > 0
+        ):
+            candidates = [m for m in candidates if self._outcome(m) > self.config.failure_gate]
+
         if not candidates:
             return []
 
@@ -691,8 +722,8 @@ class HybridRetriever:
         # Calculate frequency score
         frequency_score = self._calculate_frequency_score(memory)
 
-        # Get outcome score (already in -1 to 1 range, normalize to 0-1)
-        outcome_score = (memory.outcome_score + 1.0) / 2.0
+        # Outcome in -1 to 1, normalized to 0-1.
+        outcome_score = (self._outcome(memory) + 1.0) / 2.0
 
         # Extraction confidence, already 0-1
         confidence_score = memory.confidence
@@ -764,6 +795,13 @@ class HybridRetriever:
         bm25_weight = 1.0 - vector_weight
 
         return bm25_weight * normalized_bm25 + vector_weight * vector_score
+
+    def _outcome(self, memory: Memory) -> float:
+        """A memory's outcome signal in -1 to 1. See ``RetrievalConfig.outcome_model``."""
+        model = self.config.outcome_model
+        if model is None:
+            return memory.outcome_score
+        return model.score(*model.evidence(memory, datetime.now(UTC)))
 
     def _calculate_recency_score(self, memory: Memory) -> float:
         """Calculate recency score with exponential decay.

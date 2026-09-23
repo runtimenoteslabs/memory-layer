@@ -69,6 +69,8 @@ class TraceWriter:
         project: str | None,
         latency_ms: float,
         search_mode: str | None = None,
+        counterparts: list[str] | None = None,
+        contradicts: dict[str, list[str]] | None = None,
     ) -> None:
         """Record what a recall injected.
 
@@ -81,6 +83,10 @@ class TraceWriter:
             latency_ms: Wall-clock retrieval time.
             search_mode: ``hybrid`` or ``keyword``, so a run that lost its
                 embedding backend can be told apart from one that had it.
+            counterparts: Memories shown beside the recall because they
+                contradict one in it.
+            contradicts: For each memory shown, the shown memories it was
+                marked as contradicting.
         """
         self._write(
             {
@@ -98,10 +104,14 @@ class TraceWriter:
                         "score": round(r.score, 4),
                         "semantic_score": round(r.semantic_score, 4),
                         "outcome_score": round(r.memory.outcome_score, 4),
+                        "worked": round(r.memory.worked, 4),
+                        "failed": round(r.memory.failed, 4),
                         "use_count": r.memory.use_count,
                     }
                     for r in results
                 ],
+                "counterparts": counterparts or [],
+                "contradicts": contradicts or {},
             }
         )
 

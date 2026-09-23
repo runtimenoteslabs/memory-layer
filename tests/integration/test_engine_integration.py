@@ -62,9 +62,10 @@ class TestMemoryLifecycle:
         # 3. Record positive outcome
         await engine.record_outcome(memory.id, Outcome.WORKED)
 
-        # 4. Verify score increased
+        # 4. Verify score increased: one success over the prior, 1 / 3
         updated = await engine.get(memory.id)
-        assert updated.outcome_score == 0.2
+        assert updated.worked == 1.0
+        assert updated.outcome_score == pytest.approx(1 / 3)
 
         # 5. Search again - should still find it
         results2 = await engine.search("async debugging")
@@ -91,9 +92,11 @@ class TestMemoryLifecycle:
         for _ in range(2):
             await engine.record_outcome(memory.id, Outcome.FAILED)
 
-        # Check score is negative
+        # Two failures at 1.5 each: -3 / (3 + 2). The first has decayed by the
+        # moments between the two, hence approx.
         updated = await engine.get(memory.id)
-        assert updated.outcome_score == -0.6
+        assert updated.failed == pytest.approx(2.0)
+        assert updated.outcome_score == pytest.approx(-0.6)
 
         # Run auto-archive
         archived_count = await engine.auto_archive()
@@ -301,7 +304,7 @@ class TestOutcomeRecordingWorkflow:
 
         # Both memories should have increased scores
         for memory in updated:
-            assert memory.outcome_score == 0.2
+            assert memory.outcome_score == pytest.approx(1 / 3)
 
     async def test_outcome_score_clamping(self, engine: MemoryEngine) -> None:
         """Test that outcome scores are clamped to [-1, 1]."""
@@ -415,7 +418,9 @@ class TestEngineRestart:
         await engine2.initialize()
 
         retrieved = await engine2.get(memory.id)
-        assert retrieved.outcome_score == 0.2
+        assert retrieved.outcome_score == pytest.approx(1 / 3)
+        assert (retrieved.worked, retrieved.failed) == (1.0, 0.0)
+        assert retrieved.evidence_at is not None
 
         await engine2.close()
 
@@ -453,8 +458,11 @@ class TestRelationsAndCounterpartCredit:
 
         await engine.record_outcome([wrong.id], Outcome.FAILED)
 
-        assert (await engine.get(wrong.id)).outcome_score == pytest.approx(-0.3)
-        assert (await engine.get(right.id)).outcome_score == pytest.approx(0.05)
+        assert (await engine.get(wrong.id)).failed == 1.0
+        credited = await engine.get(right.id)
+        # A quarter of a success: 0.25 / (0.25 + 2).
+        assert credited.worked == pytest.approx(0.25)
+        assert credited.outcome_score == pytest.approx(0.25 / 2.25)
 
     async def test_success_credits_nothing(self, engine: MemoryEngine) -> None:
         """A memory that worked says nothing about what contradicts it."""
@@ -472,7 +480,8 @@ class TestRelationsAndCounterpartCredit:
 
         await engine.record_outcome([wrong.id, right.id], Outcome.FAILED)
 
-        assert (await engine.get(right.id)).outcome_score == pytest.approx(-0.3)
+        right_now = await engine.get(right.id)
+        assert (right_now.worked, right_now.failed) == (0.0, 1.0)
 
     async def test_the_credit_can_be_turned_off(self, temp_db_path: Path) -> None:
         eng = MemoryEngine(

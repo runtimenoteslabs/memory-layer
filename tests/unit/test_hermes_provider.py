@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from runtime_memory.core.models import Outcome
+from runtime_memory.core.models import Outcome, RelationType
 from runtime_memory.hermes import RuntimeMemoryProvider, register
 from runtime_memory.hermes._base import RecallStatus, is_trivial_prompt
 from runtime_memory.hermes.bridge import DEFAULT_TIMEOUT, run_sync, spawn
@@ -356,7 +356,7 @@ class TestRecall:
         assert result["memory_id"] in block
 
     def test_prefetch_flags_proven_memories(self, provider):
-        """One success is enough to mark a memory as having worked."""
+        """One success is shown, as a count."""
         stored = _call(
             provider, "runtimememory_remember", content="Clear the cache", category="troubleshooting"
         )
@@ -364,10 +364,10 @@ class TestRecall:
 
         line = _line_for(provider.prefetch("cache problems"), stored["memory_id"])
 
-        assert "has worked before" in line
+        assert "(worked 1 time)" in line
 
     def test_prefetch_flags_discredited_memories(self, provider):
-        """One failure is enough to mark a memory as having failed."""
+        """One failure is shown, as a count."""
         stored = _call(
             provider, "runtimememory_remember", content="Delete the lockfile", category="workaround"
         )
@@ -375,10 +375,10 @@ class TestRecall:
 
         line = _line_for(provider.prefetch("lockfile trouble"), stored["memory_id"])
 
-        assert "has failed before" in line
+        assert "(failed 1 time)" in line
 
-    def test_mixed_record_is_left_unmarked(self, provider):
-        """A memory that both worked and failed carries no claim either way."""
+    def test_mixed_record_shows_both_counts(self, provider):
+        """A memory that both worked and failed says so, rather than picking a side."""
         stored = _call(
             provider, "runtimememory_remember", content="Retry the request", category="pattern"
         )
@@ -388,8 +388,7 @@ class TestRecall:
 
         line = _line_for(provider.prefetch("request keeps failing"), memory_id)
 
-        assert "has worked before" not in line
-        assert "has failed before" not in line
+        assert "(worked 1 time, failed 1 time)" in line
 
     def test_trivial_prompt_skips_recall(self, provider):
         """An acknowledgement does not trigger retrieval."""
@@ -721,7 +720,8 @@ class TestOutcomes:
         )
 
         assert result["recorded"] is True
-        assert result["updated"][0]["outcome_score"] == pytest.approx(0.2)
+        assert result["updated"][0]["worked"] == 1.0
+        assert result["updated"][0]["outcome_score"] == pytest.approx(1 / 3, abs=1e-3)
 
     def test_outcome_without_ids_is_declined(self, provider):
         """Before 4.0.0 this scored every memory recalled in the turn.
@@ -763,8 +763,9 @@ class TestOutcomes:
         worked = _call(provider, "runtimememory_outcome", outcome="worked", memory_ids=[memory_id])
         failed = _call(provider, "runtimememory_outcome", outcome="failed", memory_ids=[memory_id])
 
-        assert worked["updated"][0]["outcome_score"] == pytest.approx(0.2)
-        assert failed["updated"][0]["outcome_score"] == pytest.approx(-0.1)
+        # One of each nets negative: (1 - 1.5) / (1 + 1.5 + 2).
+        assert worked["updated"][0]["outcome_score"] == pytest.approx(1 / 3, abs=1e-3)
+        assert failed["updated"][0]["outcome_score"] == pytest.approx(-0.5 / 4.5, abs=1e-3)
 
     def test_outcome_without_recall_is_a_no_op(self, provider):
         """With nothing recalled there is nothing to credit or blame."""
@@ -870,6 +871,144 @@ class TestTrace:
         record = json.loads(path.read_text())
         assert record["event"] == "confirm"
         assert record["memory_ids"] == ["a"]
+
+
+# =============================================================================
+# Conflict Tests
+# =============================================================================
+
+
+@pytest.fixture
+def keyword_provider(tmp_path, monkeypatch):
+    """A provider on keyword matching alone, so what is recalled is exact.
+
+    A memory that shares no word with the query has no relevance and is never
+    recalled, which lets a test keep one side of a contradiction out of recall.
+    """
+    monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+    monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "null")
+    monkeypatch.delenv(TRACE_ENV_VAR, raising=False)
+
+    instance = RuntimeMemoryProvider()
+    instance.initialize("session-conflicts", agent_context="primary")
+    yield instance
+    instance.shutdown()
+
+
+def _remember(instance, content):
+    return _call(instance, "runtimememory_remember", content=content, category="convention")["memory_id"]
+
+
+def _contradict(instance, first, second):
+    run_sync(instance._engine.link(first, second, RelationType.CONFLICTS_WITH))
+
+
+class TestConflicts:
+    """Memories linked as contradicting each other are shown as such."""
+
+    def test_two_recalled_memories_are_both_marked(self, keyword_provider):
+        decimal = _remember(keyword_provider, "Ledger amounts are Decimal values")
+        floats = _remember(keyword_provider, "Ledger amounts are float values rounded to cents")
+        _contradict(keyword_provider, floats, decimal)
+
+        block = keyword_provider.prefetch("how are ledger amounts stored?")
+
+        # Found by content: each line also names the other memory's id.
+        assert _line_for(block, "Decimal values").endswith(f"`{decimal}` (contradicts `{floats}`)")
+        assert _line_for(block, "float values").endswith(f"`{floats}` (contradicts `{decimal}`)")
+        assert "disagree" in block
+
+    def test_the_other_side_is_shown_when_not_recalled(self, keyword_provider):
+        """A contested note does not arrive alone."""
+        floats = _remember(keyword_provider, "Ledger amounts are float values")
+        decimal = _remember(keyword_provider, "Money must be Decimal, never binary")
+        _contradict(keyword_provider, floats, decimal)
+
+        block = keyword_provider.prefetch("how are ledger amounts stored?")
+
+        heading, counterpart = block.split("Also stored, and contradicting a memory above:")
+        assert floats in heading
+        assert f"`{decimal}` (contradicts `{floats}`)" in counterpart
+        assert keyword_provider._last_ids == [floats, decimal]
+
+    def test_counterparts_can_be_turned_off(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "null")
+        monkeypatch.setenv("RUNTIME_MEMORY_CONFLICT_COUNTERPARTS", "0")
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-no-counterparts", agent_context="primary")
+        try:
+            floats = _remember(instance, "Ledger amounts are float values")
+            decimal = _remember(instance, "Money must be Decimal, never binary")
+            _contradict(instance, floats, decimal)
+
+            block = instance.prefetch("how are ledger amounts stored?")
+
+            assert decimal not in block
+            assert "contradicts" not in block
+        finally:
+            instance.shutdown()
+
+    def test_an_archived_counterpart_is_not_shown(self, keyword_provider):
+        floats = _remember(keyword_provider, "Ledger amounts are float values")
+        decimal = _remember(keyword_provider, "Money must be Decimal, never binary")
+        _contradict(keyword_provider, floats, decimal)
+        run_sync(keyword_provider._engine.archive(decimal))
+
+        block = keyword_provider.prefetch("how are ledger amounts stored?")
+
+        assert decimal not in block
+        assert "contradicts" not in block
+
+    def test_without_conflicts_the_block_is_unchanged(self, keyword_provider):
+        memory = _remember(keyword_provider, "Ledger amounts are Decimal values")
+
+        block = keyword_provider.prefetch("how are ledger amounts stored?")
+
+        assert block == f"## Relevant memories\n\n- [convention] Ledger amounts are Decimal values `{memory}`"
+
+    def test_a_failed_lookup_keeps_the_recall(self, keyword_provider, monkeypatch):
+        memory = _remember(keyword_provider, "Ledger amounts are Decimal values")
+
+        async def broken(*_args, **_kwargs):
+            raise RuntimeError("relations table unreadable")
+
+        monkeypatch.setattr(keyword_provider._engine, "related", broken)
+        block = keyword_provider.prefetch("how are ledger amounts stored?")
+
+        assert memory in block
+
+    def test_the_trace_records_what_was_added_and_why(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "null")
+        trace_path = tmp_path / "trace.jsonl"
+        monkeypatch.setenv(TRACE_ENV_VAR, str(trace_path))
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-traced", agent_context="primary")
+        try:
+            floats = _remember(instance, "Ledger amounts are float values")
+            decimal = _remember(instance, "Money must be Decimal, never binary")
+            _contradict(instance, floats, decimal)
+            instance.prefetch("how are ledger amounts stored?")
+        finally:
+            instance.shutdown()
+
+        recall = next(
+            json.loads(line) for line in trace_path.read_text().splitlines()
+            if json.loads(line)["event"] == "recall"
+        )
+        assert recall["counterparts"] == [decimal]
+        assert recall["contradicts"] == {floats: [decimal], decimal: [floats]}
+
+    def test_the_recall_tool_names_contradictions(self, keyword_provider):
+        floats = _remember(keyword_provider, "Ledger amounts are float values")
+        decimal = _remember(keyword_provider, "Money must be Decimal, never binary")
+        _contradict(keyword_provider, floats, decimal)
+
+        found = _call(keyword_provider, "runtimememory_recall", query="ledger amounts")
+
+        (memory,) = found["memories"]
+        assert memory["contradicts"] == [decimal]
 
 
 # =============================================================================
