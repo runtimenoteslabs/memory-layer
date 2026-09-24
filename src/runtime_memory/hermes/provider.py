@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from runtime_memory.core.attribution import Attribution, attribute, session_verdict, transcript
 from runtime_memory.core.logging import get_logger
 from runtime_memory.core.models import (
     MemoryCategory,
@@ -163,6 +164,13 @@ class RuntimeMemoryProvider(MemoryProvider):
         )
         self._mirror_builtin: bool = _env_flag("RUNTIME_MEMORY_MIRROR_WRITES", True)
         self._extract_on_end: bool = _env_flag("RUNTIME_MEMORY_EXTRACT_ON_END", False)
+        self._ask_citations: bool = _env_flag("RUNTIME_MEMORY_ASK_CITATIONS", True)
+        self._session_outcomes: bool = _env_flag("RUNTIME_MEMORY_SESSION_OUTCOMES", True)
+
+        # Everything recalled in the session, and what the agent already scored
+        # with the outcome tool, for the outcome recorded when the session ends.
+        self._session_recalled: dict[str, None] = {}
+        self._session_reported: set[str] = set()
 
         # Last recall, kept so an outcome can be attributed without the model
         # having to repeat the memory ids back to us.
@@ -170,9 +178,11 @@ class RuntimeMemoryProvider(MemoryProvider):
         self._last_ids: list[str] = []
         self._last_count: int = 0
 
-        from runtime_memory.hermes.trace import TraceWriter  # noqa: PLC0415
+        from runtime_memory.hermes.trace import TRACE_FILE_NAME, TraceWriter  # noqa: PLC0415
 
-        self._trace = TraceWriter()
+        # On by default: without it there is no record of what memory did in a
+        # session, what it cost, or which outcomes came from where.
+        self._trace = TraceWriter(default=self._db_path.parent / TRACE_FILE_NAME)
 
     # -- identity ------------------------------------------------------------
 
@@ -291,6 +301,8 @@ class RuntimeMemoryProvider(MemoryProvider):
         **kwargs: Any,
     ) -> None:
         """Rebind to a new session id so later writes land in the right record."""
+        if new_session_id != self._session_id:
+            self._session_recalled, self._session_reported = {}, set()
         self._session_id = new_session_id
         if reset:
             self._turn_id, self._last_ids, self._last_count = "", [], 0
@@ -341,6 +353,9 @@ class RuntimeMemoryProvider(MemoryProvider):
         contradicts, counterparts = self._conflicts_shown(results)
         self._last_ids = [r.memory.id for r in results] + [m.id for m in counterparts]
         self._last_count = len(self._last_ids)
+        self._session_recalled.update(dict.fromkeys(self._last_ids))
+
+        block = self._format(results, contradicts, counterparts) if results else ""
 
         # Traced even when nothing came back. A recall that found nothing and a
         # recall that never happened look identical in an untraced run, and the
@@ -355,21 +370,19 @@ class RuntimeMemoryProvider(MemoryProvider):
             search_mode=self._engine.search_mode,
             counterparts=[m.id for m in counterparts],
             contradicts=contradicts,
+            block_chars=len(block),
         )
-
-        if not results:
-            return ""
-        return self._format(results, contradicts, counterparts)
+        return block
 
     def _conflicts_shown(
         self, results: list[SearchResult]
     ) -> tuple[dict[str, list[str]], list[Memory]]:
         """Find the contradictions to show with a recall, and what to add for them.
 
-        A recalled memory that contradicts a stored one arrives with it: the
-        other side, if not recalled, is added, up to ``conflict_counterparts``.
-        A contested note shown alone reads as settled, and ranking alone has
-        not kept the right side of a contradiction in the prompt.
+        When a recalled memory contradicts a stored one that was not recalled,
+        the stored one is added, up to ``conflict_counterparts``, so the model
+        sees both sides. Ranking alone has not kept the right side of a
+        contradiction in the prompt.
 
         Args:
             results: The recall.
@@ -464,6 +477,10 @@ class RuntimeMemoryProvider(MemoryProvider):
                 "Memories marked as contradicting each other disagree. Check which one "
                 "holds here before relying on either.",
             ]
+        if self._ask_citations:
+            # The only record of which memories a session used, short of a paid
+            # judge: in the Tier 3 evaluation the agent never named an id unasked.
+            lines += ["", "When you act on one of these memories, name its id in your reply."]
         return "\n".join(lines)
 
     def _line(self, memory: Memory, contradicts: dict[str, list[str]]) -> str:
@@ -478,8 +495,8 @@ class RuntimeMemoryProvider(MemoryProvider):
     def _record(self, memory: Memory) -> str:
         """A memory's outcome record as the model is shown it.
 
-        Counts, not a score: "worked 3 times" says how much evidence there is,
-        where "has worked before" read the same for one observation and ten.
+        Shown as counts, because "worked 3 times" says how much evidence there
+        is, and "has worked before" read the same for one observation and ten.
         """
         model = self._engine.retriever.config.outcome_model if self._engine else None
         if model is None:
@@ -547,42 +564,126 @@ class RuntimeMemoryProvider(MemoryProvider):
         )
 
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:
-        """Optionally extract durable facts when a session really ends."""
-        if not (self._extract_on_end and self._writes_allowed):
+        """Extract durable facts and record the session's outcome, when it really ends.
+
+        Both are optional. Extraction runs with ``RUNTIME_MEMORY_EXTRACT_ON_END``;
+        the outcome, on by default, with ``RUNTIME_MEMORY_SESSION_OUTCOMES``.
+        """
+        if self._engine is None or not messages or not self._writes_allowed:
             return
-        if self._engine is None or not messages:
-            return
-        logger.info(f"Session end: extraction over {len(messages)} messages")
         # Blocking, not spawned. Hermes calls this hook and then immediately
         # tears the provider down; in one-shot mode the process exits straight
         # after. Fired and forgotten, the extraction never survived long enough
         # to write anything, which looked exactly like extraction being off.
         # Hermes documents this hook as LLM-bound and runs it on a background
         # worker, so waiting here is what the contract expects.
-        try:
-            run_sync(self._extract(messages), timeout=EXTRACTION_TIMEOUT)
-        except Exception as exc:  # a lost extraction must not take the session with it
-            logger.warning(f"Extraction failed: {exc}")
+        followed: list[Attribution] = []
+        if self._extract_on_end:
+            logger.info(f"Session end: extraction over {len(messages)} messages")
+            try:
+                followed = run_sync(self._extract(messages), timeout=EXTRACTION_TIMEOUT)
+            except Exception as exc:  # a lost extraction must not take the session with it
+                logger.warning(f"Extraction failed: {exc}")
+                self._trace_error("extraction", exc)
+        if self._session_outcomes:
+            try:
+                run_sync(self._record_session_outcome(messages, followed), timeout=30.0)
+            except Exception as exc:  # nor must a lost outcome
+                logger.warning(f"Session outcome not recorded: {exc}")
+                self._trace_error("session_outcome", exc)
 
-    async def _extract(self, messages: list[dict[str, Any]]) -> None:
+    def _trace_error(self, kind: str, exc: BaseException) -> None:
+        """Trace a failure; a timeout's message is empty, so its type is named."""
+        self._trace.error(
+            turn_id=self._turn_id,
+            session_id=self._session_id,
+            kind=kind,
+            message=str(exc) or type(exc).__name__,
+        )
+
+    async def _record_session_outcome(
+        self, messages: list[dict[str, Any]], followed: list[Attribution]
+    ) -> None:
+        """Record the session's verdict against the memories it acted on.
+
+        The verdict is the last test run in the session's tool results. It goes
+        to the recalled memories an attributor names (cited by id, a command
+        that was run, or named by extraction), once each, and to no others:
+        applying a verdict to everything recalled left the store worse than
+        recording nothing in three Tier 2 evaluation runs. Memories the agent
+        already scored with the outcome tool this session are left alone.
+
+        Args:
+            messages: The session's messages.
+            followed: Memories the extraction call judged the session followed.
+        """
+        verdict = session_verdict(messages)
+        if verdict is None:
+            logger.info("Session end: no test run found, so no outcome recorded")
+            return
+        engine = self._require_engine()
+        recalled = await engine.get_many(list(self._session_recalled))
+        found = {a.memory_id: a for a in attribute(messages, recalled)}
+        for attribution in followed:
+            found.setdefault(attribution.memory_id, attribution)
+
+        by_source: dict[str, list[str]] = {}
+        for attribution in found.values():
+            if attribution.memory_id not in self._session_reported:
+                by_source.setdefault(attribution.source, []).append(attribution.memory_id)
+        for source, memory_ids in by_source.items():
+            await engine.record_outcome(memory_ids, verdict)
+            self._trace.outcome(
+                turn_id=self._turn_id,
+                session_id=self._session_id,
+                outcome=verdict.value,
+                memory_ids=memory_ids,
+                origin=source,
+            )
+        logger.info(
+            f"Session end: '{verdict.value}' recorded for "
+            f"{sum(len(ids) for ids in by_source.values())} of {len(recalled)} recalled memories"
+        )
+
+    async def _extract(self, messages: list[dict[str, Any]]) -> list[Attribution]:
         """Run LLM extraction over a finished session.
 
         Requires the ``extraction`` extra and an API key. Failures are logged and
         dropped: a missed extraction is a lost convenience, not a lost session.
+
+        Returns:
+            The recalled memories the extraction call judged the session followed.
         """
         from runtime_memory.extraction.extractor import MemoryExtractor  # noqa: PLC0415
 
-        transcript = "\n".join(
-            f"{m.get('role', '?')}: {m.get('content', '')}" for m in messages if m.get("content")
-        )
+        engine = self._require_engine()
         result = await MemoryExtractor().extract_and_store(
-            transcript=transcript,
-            engine=self._require_engine(),
+            transcript=transcript(messages),
+            engine=engine,
             project=self._project,
+            recalled=await engine.get_many(list(self._session_recalled)),
         )
+        # Recorded whether or not the extraction succeeded: a failed call is
+        # still paid for.
+        if result.usage is not None:
+            self._trace.usage(
+                turn_id=self._turn_id,
+                session_id=self._session_id,
+                kind="extraction",
+                model=result.usage.model,
+                calls=result.usage.calls,
+                input_tokens=result.usage.input_tokens,
+                output_tokens=result.usage.output_tokens,
+            )
         if not result.success:
             logger.warning(f"Extraction failed: {result.error}")
-            return
+            self._trace.error(
+                turn_id=self._turn_id,
+                session_id=self._session_id,
+                kind="extraction",
+                message=str(result.error),
+            )
+            return []
 
         # extract_and_store writes through the engine without handing back the
         # stored rows, so the trace records how many landed, not which.
@@ -601,6 +702,10 @@ class RuntimeMemoryProvider(MemoryProvider):
                 session_id=self._session_id,
                 memory_ids=result.confirmed_ids,
             )
+        return [
+            Attribution(memory_id, "extraction", evidence)
+            for memory_id, evidence in result.acted_on
+        ]
 
     async def _store(
         self,
@@ -674,6 +779,7 @@ class RuntimeMemoryProvider(MemoryProvider):
         for result in results:
             if result.memory.id not in self._last_ids:
                 self._last_ids.append(result.memory.id)
+        self._session_recalled.update(dict.fromkeys(r.memory.id for r in results))
         return results
 
     def contradictions(self, memory_ids: list[str]) -> dict[str, list[str]]:
@@ -711,6 +817,7 @@ class RuntimeMemoryProvider(MemoryProvider):
             return []
 
         updated = run_sync(engine.record_outcome(memory_ids, outcome))
+        self._session_reported.update(memory_ids)
         self._trace.outcome(
             turn_id=self._turn_id,
             session_id=self._session_id,

@@ -2,15 +2,14 @@
 
 .. deprecated:: 2.0.0
     This module is deprecated in favor of the native Claude Code 2.1.1+
-    hook system defined in hooks/hooks.json. The native hook system:
-    - Doesn't require external scripts
-    - Is managed by Claude Code directly
-    - Supports environment variables like $CLAUDE_SESSION_ID
+    hooks that ``mem install-plugin`` writes to ``.claude/settings.json``.
+    Claude Code runs those itself, with no external scripts, and passes
+    variables such as ``$CLAUDE_SESSION_ID``.
 
     Migration guide:
-    - pre-session → hooks.json SessionStart
-    - post-session → hooks.json SessionEnd
-    - pre-compact → hooks.json PreCompact
+    - pre-session: the installed SessionStart hook
+    - post-session: the installed SessionEnd hook
+    - pre-compact: add a PreCompact hook that runs ``mem extract --auto``
 
 Provides hooks that integrate with Claude Code's lifecycle:
 - pre-session: Inject relevant context before starting
@@ -25,7 +24,8 @@ import warnings
 # Emit deprecation warning when module is imported
 warnings.warn(
     "The hooks module is deprecated as of v2.0.0. "
-    "Use the native hook system in hooks/hooks.json instead.",
+    "Use the Claude Code plugin hooks that `mem install-plugin` writes to "
+    ".claude/settings.json instead.",
     DeprecationWarning,
     stacklevel=2,
 )

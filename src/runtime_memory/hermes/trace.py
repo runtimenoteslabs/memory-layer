@@ -6,8 +6,10 @@ outcome writes another naming the memories it credited or blamed. Joining the tw
 on ``turn_id`` reconstructs, per turn, what was retrieved and whether it helped -
 which is the measurement the outcome-learning claim needs.
 
-Tracing is off unless a path is configured, and a broken trace never breaks a
-turn: writes are best-effort and failures are logged once.
+The Hermes provider traces by default, to ``hermes-trace.jsonl`` beside the store;
+``RUNTIME_MEMORY_HERMES_TRACE`` names another file, or ``off`` turns tracing off.
+A broken trace never breaks a turn: writes are best-effort and failures are
+logged once. ``summarize`` reads a trace back for ``mem stats``.
 """
 
 from __future__ import annotations
@@ -24,21 +26,33 @@ from runtime_memory.core.logging import get_logger
 logger = get_logger(__name__)
 
 TRACE_ENV_VAR = "RUNTIME_MEMORY_HERMES_TRACE"
-"""Environment variable holding the trace file path. Unset disables tracing."""
+"""Environment variable holding the trace file path, or ``off``."""
+
+TRACE_FILE_NAME = "hermes-trace.jsonl"
+"""The trace's file name beside the store, when no path is configured."""
+
+_OFF = frozenset({"off", "none", "false", "0"})
 
 
 class TraceWriter:
     """Append-only JSONL writer for retrieval and outcome events."""
 
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(self, path: str | Path | None = None, default: Path | None = None) -> None:
         """Initialize the writer.
 
         Args:
-            path: Trace file path. Falls back to ``RUNTIME_MEMORY_HERMES_TRACE``;
-                tracing is disabled when neither is set.
+            path: Trace file path. Falls back to ``RUNTIME_MEMORY_HERMES_TRACE``,
+                then to ``default``. ``off`` in either turns tracing off, and so
+                does having none of the three.
+            default: Where to trace when nothing is configured.
         """
-        raw = path or os.environ.get(TRACE_ENV_VAR)
-        self._path = Path(raw).expanduser() if raw else None
+        raw = str(path or os.environ.get(TRACE_ENV_VAR) or "").strip()
+        if raw.lower() in _OFF:
+            self._path = None
+        elif raw:
+            self._path = Path(raw).expanduser()
+        else:
+            self._path = default
         self._lock = threading.Lock()
         self._warned = False
 
@@ -71,6 +85,7 @@ class TraceWriter:
         search_mode: str | None = None,
         counterparts: list[str] | None = None,
         contradicts: dict[str, list[str]] | None = None,
+        block_chars: int = 0,
     ) -> None:
         """Record what a recall injected.
 
@@ -87,6 +102,9 @@ class TraceWriter:
                 contradict one in it.
             contradicts: For each memory shown, the shown memories it was
                 marked as contradicting.
+            block_chars: Length of the injected block, which the agent's model
+                reads on every call it makes in the turn. Characters, because
+                that model's tokenizer is not Runtime Memory's to know.
         """
         self._write(
             {
@@ -112,6 +130,7 @@ class TraceWriter:
                 ],
                 "counterparts": counterparts or [],
                 "contradicts": contradicts or {},
+                "block_chars": block_chars,
             }
         )
 
@@ -131,7 +150,10 @@ class TraceWriter:
             session_id: Hermes session the outcome came from.
             outcome: ``worked``, ``failed`` or ``partial``.
             memory_ids: Memories the score change was applied to.
-            origin: What produced the outcome, e.g. ``tool`` or ``auto``.
+            origin: What produced the outcome: ``tool`` when the model reported
+                it, ``declined`` when the call named no memories, and ``cited``,
+                ``command`` or ``extraction`` for an outcome recorded at session
+                end, after the attribution that found the memory.
         """
         self._write(
             {
@@ -191,6 +213,64 @@ class TraceWriter:
             }
         )
 
+    def usage(
+        self,
+        *,
+        turn_id: str,
+        session_id: str,
+        kind: str,
+        model: str,
+        calls: int,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        """Record the model calls Runtime Memory itself made, such as extraction.
+
+        Args:
+            turn_id: The turn the calls belong to.
+            session_id: Hermes session they were made for.
+            kind: What made them, e.g. ``extraction``.
+            model: The model called.
+            calls: Number of calls.
+            input_tokens: Input tokens across the calls.
+            output_tokens: Output tokens across the calls, thinking included.
+        """
+        self._write(
+            {
+                "event": "usage",
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "kind": kind,
+                "model": model,
+                "calls": calls,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            }
+        )
+
+    def error(self, *, turn_id: str, session_id: str, kind: str, message: str) -> None:
+        """Record something that failed without failing the turn, such as extraction.
+
+        Hermes runs the provider's session-end work where a warning reaches no
+        log file, so a timed-out extraction was invisible except as a missing
+        write.
+
+        Args:
+            turn_id: The turn it belongs to.
+            session_id: Hermes session it happened in.
+            kind: What failed, e.g. ``extraction`` or ``session_outcome``.
+            message: The error, as text.
+        """
+        self._write(
+            {
+                "event": "error",
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "kind": kind,
+                "message": message,
+            }
+        )
+
     def _write(self, record: dict[str, Any]) -> None:
         """Append one record, swallowing and logging any failure."""
         if self._path is None:
@@ -206,3 +286,53 @@ class TraceWriter:
             if not self._warned:
                 logger.warning(f"Trace write failed ({exc}); further errors muted")
                 self._warned = True
+
+
+def summarize(path: Path) -> dict[str, Any]:
+    """Totals from a trace file, for ``mem stats``.
+
+    Args:
+        path: The trace file.
+
+    Returns:
+        Recalls (count, by search mode, mean injected characters), outcomes (by
+        origin, as events and as memories), and extraction usage (calls and
+        tokens by model). Unreadable lines are skipped and counted.
+    """
+    recalls = 0
+    block_chars = 0
+    by_mode: dict[str, int] = {}
+    outcomes: dict[str, dict[str, int]] = {}
+    usage: dict[str, dict[str, int]] = {}
+    skipped = 0
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                skipped += 1
+                continue
+            event = record.get("event")
+            if event == "recall":
+                recalls += 1
+                block_chars += int(record.get("block_chars") or 0)
+                mode = str(record.get("search_mode") or "unknown")
+                by_mode[mode] = by_mode.get(mode, 0) + 1
+            elif event == "outcome":
+                origin = outcomes.setdefault(str(record.get("origin")), {"events": 0, "memories": 0})
+                origin["events"] += 1
+                origin["memories"] += len(record.get("memory_ids") or [])
+            elif event == "usage":
+                model = usage.setdefault(
+                    str(record.get("model")), {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+                )
+                for key in model:
+                    model[key] += int(record.get(key) or 0)
+    return {
+        "recalls": recalls,
+        "recalls_by_search_mode": by_mode,
+        "mean_block_chars": block_chars / recalls if recalls else 0.0,
+        "outcomes_by_origin": outcomes,
+        "extraction_usage": usage,
+        "skipped_lines": skipped,
+    }

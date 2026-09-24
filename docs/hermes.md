@@ -63,21 +63,22 @@ beyond the provider name.
 | `RUNTIME_MEMORY_RECALL_LIMIT` | `8` | Memories injected per turn |
 | `RUNTIME_MEMORY_MIN_SCORE` | `0.0` | Floor on the combined score for injection |
 | `RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR` | `2` | Two-stage recall, see below |
-| `RUNTIME_MEMORY_CONFLICT_COUNTERPARTS` | `3` | Contradicting memories added beside a recall, see Outcome feedback |
+| `RUNTIME_MEMORY_CONFLICT_COUNTERPARTS` | `3` | Contradicting memories added below a recall, see Outcome feedback |
 | `RUNTIME_MEMORY_PROJECT` | workspace name | Project scope for memories |
 | `RUNTIME_MEMORY_MIRROR_WRITES` | `true` | Mirror built-in memory writes |
 | `RUNTIME_MEMORY_EXTRACT_ON_END` | `false` | Extract memories at session end |
-| `RUNTIME_MEMORY_HERMES_TRACE` | unset | Path for the evaluation trace |
+| `RUNTIME_MEMORY_SESSION_OUTCOMES` | `true` | Record the session's test verdict at session end, see Outcome feedback |
+| `RUNTIME_MEMORY_ASK_CITATIONS` | `true` | Ask the agent to name the memories it uses |
+| `RUNTIME_MEMORY_HERMES_TRACE` | `hermes-trace.jsonl` beside the store | Path for the trace, or `off` |
 
 Recall runs in two stages. The `recall_limit x factor` memories most relevant to
 the message form a pool, a memory with no relevance at all never enters it, and
 only the pool competes on the combined score. At `1` the other signals can only
-reorder what relevance picked; at the default `2` they can replace up to every
-slot with the next most relevant memory, which is what lets a memory that keeps
-failing drop out. Set `off` to let every memory compete on the combined score,
-as 3.x did. Only the semantic part of that score depends on the message, so a
-memory that has worked before can then take a slot from one that matches the
-message far better.
+reorder what relevance picked. At the default `2` they can also replace a
+memory with a less relevant one whose record is much better. Set `off` to let
+every memory compete on the combined score, as 3.x did. Only the semantic part
+of that score depends on the message, so a memory that has worked before can
+then take a slot from one that matches the message far better.
 
 `local` degrades on its own: without `sentence-transformers` it indexes no
 vectors and retrieval scores on keywords alone. Set `null` to choose that even
@@ -107,10 +108,10 @@ which would bury the curated memories that retrieval depends on.
 - **Mirrored built-in writes.** When Hermes writes to its own note file, the same
   fact also lands in the store. Hermes keeps its small file for always-on
   context, and the store keeps the full history.
-- **End-of-session extraction**, off by default. It runs one LLM call over the
-  finished session, which is shown the project's stored memories: it leaves out
-  what they already say, counts the ones the session confirmed, and records
-  which stored memory a new one updates, contradicts, or extends.
+- **End-of-session extraction**, off by default. It makes one LLM call over the
+  finished session. The call is shown the project's stored memories, skips what
+  they already say, counts the ones the session confirmed, and records which
+  stored memory each new one updates, contradicts, or extends.
 
 Subagent, cron, and flush contexts read the store but never write to it, so
 background runs cannot fill it with duplicates.
@@ -119,9 +120,9 @@ background runs cannot fill it with duplicates.
 
 Each memory counts the times it worked and the times it failed; `partial` adds a
 quarter of a success. A failure weighs 1.5 successes, so a memory that misleads
-once needs more than one success to read as reliable again. Counts halve over 90
-days. A memory that failed twice with no successes is not recalled until its
-failures fade.
+once needs more than one success to read as reliable again. Each count halves
+every 90 days. A memory that failed twice with no successes is not recalled until
+its failures fade.
 
 Injected memories carry their id and their record, as counts, so the model can
 cite a specific memory and can see how much evidence there is:
@@ -133,29 +134,51 @@ cite a specific memory and can see how much evidence there is:
 `runtimememory_outcome` needs the ids of the memories the outcome is about; a
 call without them is declined, and the trace records it as such.
 
-Two memories stored as contradicting each other are marked in the block, each
-naming the other, with a line asking the model to check which holds before
-relying on either. When a recalled memory contradicts one that was not recalled,
-that one is added under the recall, up to `RUNTIME_MEMORY_CONFLICT_COUNTERPARTS`,
-so a contested memory never arrives looking settled:
+When a session ends, the provider records an outcome without the agent's help.
+The verdict is the last test run in the session's tool results, from pytest,
+unittest, Jest, Cargo, or Go. It goes to the recalled memories the session acted
+on:
+
+- memories the agent named by id in its replies or tool arguments
+- `command` memories whose quoted command the agent ran
+- with extraction on, memories the extraction call judged the agent followed
+
+No other recalled memory gets the verdict, a memory the agent already scored with
+`runtimememory_outcome` is not scored again, and a session that ran no tests
+records nothing. The block ends by asking the agent to name the ids of memories it
+acts on, since that is how most attributions are found. To leave that line out,
+set `RUNTIME_MEMORY_ASK_CITATIONS=false`. To stop recording session outcomes, set
+`RUNTIME_MEMORY_SESSION_OUTCOMES=false`.
+
+When two recalled memories are stored as contradicting each other, each is
+marked with the other's id, and the block asks the model to check which one
+holds before relying on either. When a recalled memory contradicts one that was
+not recalled, that memory is added below the recall, up to
+`RUNTIME_MEMORY_CONFLICT_COUNTERPARTS`, so the model sees both sides:
 
 ```
-- [convention] Amounts are float, rounded to cents `9a9f` (contradicts `c21e`)
+- [convention] Amounts are float, rounded to cents `4c1d` (contradicts `c21e`)
 
 Also stored, and contradicting a memory above:
-- [convention] Amounts are Decimal, never float `c21e` (contradicts `9a9f`)
+- [convention] Amounts are Decimal, never float `c21e` (contradicts `4c1d`)
 ```
 
 `runtimememory_recall` lists the same links in each result's `contradicts`.
 
 ## Evaluation trace
 
-Setting `RUNTIME_MEMORY_HERMES_TRACE` writes one JSONL record per recall, write,
-confirmation, and outcome:
+The provider writes one JSONL record per recall, write, confirmation, outcome,
+and extraction call to `hermes-trace.jsonl` beside the store. Set
+`RUNTIME_MEMORY_HERMES_TRACE` to write it somewhere else, or to `off` to stop
+tracing:
 
 ```bash
 export RUNTIME_MEMORY_HERMES_TRACE=~/traces/hermes-run.jsonl
 ```
+
+The trace holds each message the recall searched with, so it contains your
+prompts. `mem stats` summarises it: recalls by search mode, the average size of
+the injected block, outcomes by origin, and extraction tokens.
 
 Records share a `turn_id`, so joining `recall` to `outcome` on it reconstructs,
 per turn, which memories were injected and whether they helped.
@@ -165,16 +188,21 @@ per turn, which memories were injected and whether they helped.
  "retrieved": [{"memory_id": "9a9f", "score": 0.82, "outcome_score": 0.33,
                 "worked": 1.0, "failed": 0.0}]}
 {"event": "outcome", "turn_id": "a1b2", "outcome": "worked",
- "memory_ids": ["9a9f"], "origin": "auto"}
+ "memory_ids": ["9a9f"], "origin": "tool"}
 ```
 
 A recall also records its `search_mode` (`hybrid` or `keyword`), any
-`counterparts` added beside it, and the `contradicts` marks shown. A `confirm`
-record lists stored memories an extraction learned again instead of storing
-again.
+`counterparts` added below it, the `contradicts` marks shown, and `block_chars`,
+the length of the injected block in characters. The block is sent with every
+model call in the turn, so its length is what memory adds to the agent's input.
+A `usage` record gives the model, calls, and input and output tokens of each
+extraction, whether or not it succeeded. An outcome's
+`origin` is `tool` when the model reported it, `declined` when the call named no
+memories, and `cited`, `command`, or `extraction` for an outcome recorded at
+session end, after the attribution that found the memory. A `confirm` record lists the stored memories that an extraction
+confirmed instead of storing them again.
 
-Tracing stays off until the variable is set, and a failed trace write never
-breaks a turn.
+A failed trace write never breaks a turn.
 
 ## Design notes
 

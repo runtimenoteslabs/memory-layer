@@ -6,7 +6,7 @@ Persistent memory for AI coding agents with outcome-based learning.
 
 ## What It Does
 
-Runtime Memory stores knowledge from your coding sessions and learns which memories actually help. Each memory keeps a record of how often it worked and how often it failed. Advice that keeps working ranks higher, advice that keeps failing stops being retrieved, and old evidence fades.
+Runtime Memory stores knowledge from your coding sessions and records how often each memory worked and how often it failed. Among the memories relevant to a query, those with a better record rank higher. A memory that keeps failing is left out of retrieval until its failures fade.
 
 ## Installation
 
@@ -77,6 +77,12 @@ mem add "Use type hints for better IDE support" -c convention
 
 # Search memories
 mem search "type hints"
+
+# See why a search returns what it does, and why the rest were left out
+mem why "type hints"
+
+# Store statistics: outcome records, search mode, and the Hermes trace if present
+mem stats
 
 # Record outcome
 mem outcome <memory-id> worked
@@ -309,14 +315,17 @@ mem serve --rest --port 8080
 
 A memory's outcome score is `(worked - 1.5 x failed) / (worked + 1.5 x failed + 2)`,
 between -1 and 1. One success gives 0.33 and ten give 0.83, so a single
-observation counts for less than a settled record. A failure weighs 1.5
-successes, because bad advice wastes debugging time and erodes trust. Every
-count halves over 90 days, so a record from last year fades.
+observation counts for less than a long record. A failure weighs 1.5 successes,
+because bad advice wastes debugging time and erodes trust. Each count halves
+every 90 days.
 
-A memory whose score reads -0.5 or worse, two failures and no successes, is not
-retrieved until its failures fade. One failure is not enough, since it may have
-been blamed on the wrong memory. See `RetrievalConfig.failure_gate` and
-`core/outcomes.py` to change any of this.
+Retrieval leaves out a memory whose score is -0.5 or lower, which takes two
+failures and no successes. One failure is not enough, because it may have been
+blamed on the wrong memory. The memory is retrieved again once its failures
+have faded.
+
+To change these values, see `RetrievalConfig.outcome_model` and
+`RetrievalConfig.failure_gate`.
 
 ## How Retrieval Works
 

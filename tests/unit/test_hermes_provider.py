@@ -21,12 +21,14 @@ from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from runtime_memory.core.attribution import Attribution
 from runtime_memory.core.models import Outcome, RelationType
+from runtime_memory.extraction.extractor import ExtractionResult, MemoryExtractor, ModelUsage
 from runtime_memory.hermes import RuntimeMemoryProvider, register
 from runtime_memory.hermes._base import RecallStatus, is_trivial_prompt
 from runtime_memory.hermes.bridge import DEFAULT_TIMEOUT, run_sync, spawn
 from runtime_memory.hermes.provider import PROVIDER_NAME, _embedding_provider_name
-from runtime_memory.hermes.trace import TRACE_ENV_VAR, TraceWriter
+from runtime_memory.hermes.trace import TRACE_ENV_VAR, TraceWriter, summarize
 
 
 @pytest.fixture
@@ -861,6 +863,47 @@ class TestTrace:
 
         assert json.loads(path.read_text())["count"] == 2
 
+    def test_the_default_path_is_used_when_nothing_is_configured(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(TRACE_ENV_VAR, raising=False)
+
+        writer = TraceWriter(default=tmp_path / "hermes-trace.jsonl")
+
+        assert writer.path == tmp_path / "hermes-trace.jsonl"
+
+    @pytest.mark.parametrize("value", ["off", "OFF", "none", "0"])
+    def test_off_turns_tracing_off(self, tmp_path, monkeypatch, value):
+        monkeypatch.setenv(TRACE_ENV_VAR, value)
+
+        assert TraceWriter(default=tmp_path / "hermes-trace.jsonl").enabled is False
+
+    def test_the_provider_traces_by_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "null")
+        monkeypatch.delenv(TRACE_ENV_VAR, raising=False)
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-default-trace", agent_context="primary")
+        try:
+            instance.prefetch("how are ledger amounts stored?")
+        finally:
+            instance.shutdown()
+
+        assert (tmp_path / "hermes-trace.jsonl").exists()
+
+    def test_summarize_counts_what_a_trace_holds(self, tmp_path):
+        path = tmp_path / "t.jsonl"
+        writer = TraceWriter(path)
+        writer.usage(turn_id="t", session_id="s", kind="extraction", model="m",
+                     calls=1, input_tokens=10, output_tokens=5)
+        writer.outcome(turn_id="t", session_id="s", outcome="worked", memory_ids=["a"], origin="cited")
+        with path.open("a") as handle:
+            handle.write("not json\n")
+
+        summary = summarize(path)
+
+        assert summary["extraction_usage"] == {"m": {"calls": 1, "input_tokens": 10, "output_tokens": 5}}
+        assert summary["outcomes_by_origin"] == {"cited": {"events": 1, "memories": 1}}
+        assert summary["skipped_lines"] == 1
+
     def test_confirmations_are_not_writes(self, tmp_path):
         """A memory learned again is its own event, so it never counts as a write."""
         path = tmp_path / "t.jsonl"
@@ -965,7 +1008,10 @@ class TestConflicts:
 
         block = keyword_provider.prefetch("how are ledger amounts stored?")
 
-        assert block == f"## Relevant memories\n\n- [convention] Ledger amounts are Decimal values `{memory}`"
+        assert block == (
+            f"## Relevant memories\n\n- [convention] Ledger amounts are Decimal values `{memory}`"
+            "\n\nWhen you act on one of these memories, name its id in your reply."
+        )
 
     def test_a_failed_lookup_keeps_the_recall(self, keyword_provider, monkeypatch):
         memory = _remember(keyword_provider, "Ledger amounts are Decimal values")
@@ -1009,6 +1055,185 @@ class TestConflicts:
 
         (memory,) = found["memories"]
         assert memory["contradicts"] == [decimal]
+
+
+# =============================================================================
+# Session Outcome Tests
+# =============================================================================
+
+
+@pytest.fixture
+def session_provider(tmp_path, monkeypatch):
+    """A keyword-only provider with a trace, for outcomes recorded at session end."""
+    monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+    monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "null")
+    monkeypatch.setenv(TRACE_ENV_VAR, str(tmp_path / "trace.jsonl"))
+    for name in ("RUNTIME_MEMORY_SESSION_OUTCOMES", "RUNTIME_MEMORY_ASK_CITATIONS"):
+        monkeypatch.delenv(name, raising=False)
+
+    instance = RuntimeMemoryProvider()
+    instance.initialize("session-outcomes", agent_context="primary")
+    yield instance
+    instance.shutdown()
+
+
+def _session(cited_id, test_output="5 passed in 0.12s"):
+    """A session whose agent names one memory and whose last test run printed this."""
+    return [
+        {"role": "user", "content": "how are ledger amounts stored?"},
+        {"role": "assistant", "content": f"Following `{cited_id}`, amounts stay Decimal."},
+        {"role": "tool", "content": json.dumps({"output": test_output, "exit_code": 0})},
+    ]
+
+
+def _record(instance, memory_id):
+    memory = run_sync(instance._engine.get(memory_id))
+    return memory.worked, memory.failed
+
+
+class TestSessionOutcomes:
+    """The session's verdict reaches the memories it acted on, and only those."""
+
+    def _two_recalled(self, instance):
+        decimal = _remember(instance, "Ledger amounts are Decimal values")
+        floats = _remember(instance, "Ledger amounts are float values")
+        instance.prefetch("how are ledger amounts stored?")
+        return decimal, floats
+
+    def test_the_block_asks_for_citations(self, session_provider):
+        _remember(session_provider, "Ledger amounts are Decimal values")
+
+        block = session_provider.prefetch("how are ledger amounts stored?")
+
+        assert "name its id" in block
+
+    def test_the_request_can_be_turned_off(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "memories.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "null")
+        monkeypatch.setenv("RUNTIME_MEMORY_ASK_CITATIONS", "false")
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-quiet", agent_context="primary")
+        try:
+            _remember(instance, "Ledger amounts are Decimal values")
+            assert "name its id" not in instance.prefetch("how are ledger amounts stored?")
+        finally:
+            instance.shutdown()
+
+    def test_a_cited_memory_takes_the_verdict_and_the_rest_do_not(self, session_provider):
+        decimal, floats = self._two_recalled(session_provider)
+
+        session_provider.on_session_end(_session(decimal))
+
+        assert _record(session_provider, decimal) == (1.0, 0.0)
+        assert _record(session_provider, floats) == (0.0, 0.0)
+
+    def test_a_failing_last_run_records_a_failure(self, session_provider):
+        decimal, _ = self._two_recalled(session_provider)
+
+        session_provider.on_session_end(_session(decimal, "1 failed, 4 passed in 0.3s"))
+
+        assert _record(session_provider, decimal) == (0.0, 1.0)
+
+    def test_no_test_run_records_nothing(self, session_provider):
+        decimal, _ = self._two_recalled(session_provider)
+
+        session_provider.on_session_end(_session(decimal, "wrote ledger/entries.py"))
+
+        assert _record(session_provider, decimal) == (0.0, 0.0)
+
+    def test_the_trace_names_where_the_attribution_came_from(self, session_provider, tmp_path):
+        decimal, _ = self._two_recalled(session_provider)
+
+        session_provider.on_session_end(_session(decimal))
+
+        events = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text().splitlines()]
+        (outcome,) = [e for e in events if e["event"] == "outcome"]
+        assert (outcome["origin"], outcome["memory_ids"], outcome["outcome"]) == (
+            "cited", [decimal], "worked",
+        )
+
+    def test_a_memory_the_agent_already_scored_is_not_scored_again(self, session_provider):
+        decimal, _ = self._two_recalled(session_provider)
+        _call(session_provider, "runtimememory_outcome", outcome="worked", memory_ids=[decimal])
+
+        session_provider.on_session_end(_session(decimal))
+
+        assert _record(session_provider, decimal) == (1.0, 0.0)
+
+    def test_extraction_attributions_are_recorded_too(self, session_provider):
+        decimal, floats = self._two_recalled(session_provider)
+
+        async def extract(_messages):
+            return [Attribution(floats, "extraction", "used float amounts")]
+
+        session_provider._extract_on_end = True
+        session_provider._extract = extract
+        session_provider.on_session_end(_session(decimal, "1 failed in 0.1s"))
+
+        assert _record(session_provider, floats) == (0.0, 1.0)
+        assert _record(session_provider, decimal) == (0.0, 1.0)
+
+    def test_turned_off_records_nothing(self, session_provider):
+        decimal, _ = self._two_recalled(session_provider)
+        session_provider._session_outcomes = False
+
+        session_provider.on_session_end(_session(decimal))
+
+        assert _record(session_provider, decimal) == (0.0, 0.0)
+
+    def test_a_subagent_records_nothing(self, session_provider):
+        decimal, _ = self._two_recalled(session_provider)
+        session_provider._writes_allowed = False
+
+        session_provider.on_session_end(_session(decimal))
+
+        assert _record(session_provider, decimal) == (0.0, 0.0)
+
+    def test_the_recall_trace_records_the_block_size(self, session_provider, tmp_path):
+        _remember(session_provider, "Ledger amounts are Decimal values")
+
+        block = session_provider.prefetch("how are ledger amounts stored?")
+
+        events = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text().splitlines()]
+        (recall,) = [e for e in events if e["event"] == "recall"]
+        assert recall["block_chars"] == len(block) > 0
+
+    def test_extraction_usage_is_traced(self, session_provider, tmp_path, monkeypatch):
+        async def extract_and_store(self, **kwargs):
+            return ExtractionResult(
+                memories=[], summary="", transcript_length=10, extraction_time_ms=1.0,
+                error="bad JSON", usage=ModelUsage("claude-sonnet-5", 1, 2400, 900),
+            )
+
+        monkeypatch.setattr(MemoryExtractor, "extract_and_store", extract_and_store)
+        session_provider._extract_on_end = True
+        session_provider.on_session_end([{"role": "user", "content": "hello"}])
+
+        events = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text().splitlines()]
+        (usage,) = [e for e in events if e["event"] == "usage"]
+        assert (usage["kind"], usage["calls"], usage["input_tokens"], usage["output_tokens"]) == (
+            "extraction", 1, 2400, 900,
+        )
+
+    def test_a_timed_out_extraction_is_traced(self, session_provider, tmp_path):
+        async def extract(_messages):
+            raise TimeoutError
+
+        session_provider._extract_on_end = True
+        session_provider._extract = extract
+        session_provider.on_session_end([{"role": "user", "content": "hello"}])
+
+        events = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text().splitlines()]
+        (error,) = [e for e in events if e["event"] == "error"]
+        assert (error["kind"], error["message"]) == ("extraction", "TimeoutError")
+
+    def test_a_new_session_starts_with_nothing_recalled(self, session_provider):
+        decimal, _ = self._two_recalled(session_provider)
+
+        session_provider.on_session_switch("session-next")
+        session_provider.on_session_end(_session(decimal))
+
+        assert _record(session_provider, decimal) == (0.0, 0.0)
 
 
 # =============================================================================

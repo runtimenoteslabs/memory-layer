@@ -199,9 +199,9 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
    - "partial" adds a quarter of a success
 
    The counts give a score between -1 and 1, and a single observation counts for
-   less than a settled record. Memories with a better record rank higher among
-   relevant ones, a memory that failed twice with no successes is not retrieved,
-   and counts halve over 90 days so old evidence fades.
+   less than a long record. Among relevant memories, those with a better record
+   rank higher. A memory that failed twice with no successes is left out of
+   retrieval until its failures fade; each count halves every 90 days.
 
 5. **Privacy**: Everything stays on your machine. No data is sent anywhere.
 

@@ -538,6 +538,26 @@ class TestClaudeCodeAdapter:
             assert current.content == "Current"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(("status", "recorded"), [("pending", 0), ("completed", 1)])
+    async def test_only_a_completed_task_credits_its_memories(
+        self, mock_engine, tmp_path, status, recorded
+    ):
+        """Naming a task that is not completed records nothing."""
+        from runtime_memory.tasks.claude_code_adapter import ClaudeCodeAdapter
+
+        mock_engine._storage.db_path = str(tmp_path / "links.db")
+        (tmp_path / "session-agent.json").write_text(
+            json.dumps([{"content": "Add tests", "status": status}])
+        )
+        adapter = ClaudeCodeAdapter(mock_engine, todos_dir=tmp_path)
+        await adapter.initialize()
+        (task,) = adapter.list_tasks()
+        await adapter.link_memory_to_task(task.id, "memory-1")
+
+        assert await adapter.on_task_completed(task.id) == recorded
+        assert mock_engine.record_outcome.await_count == recorded
+
+    @pytest.mark.asyncio
     async def test_null_adapter(self, mock_engine):
         """Test null adapter for unavailable Claude Code."""
         from runtime_memory.tasks.claude_code_adapter import NullClaudeCodeAdapter
@@ -622,6 +642,22 @@ class TestUnifiedTaskAdapter:
             cc_tasks = adapter.list_tasks(source=TaskSource.CLAUDE_CODE)
             assert len(cc_tasks) == 1
             assert cc_tasks[0].source == TaskSource.CLAUDE_CODE
+
+    @pytest.mark.asyncio
+    async def test_a_beads_task_is_scored_by_its_status(self, mock_engine):
+        """A bd- task goes through the status check, not straight to "done"."""
+        from runtime_memory.tasks.unified_adapter import UnifiedTaskAdapter
+
+        adapter = UnifiedTaskAdapter(mock_engine)
+        await adapter.initialize()
+        beads = MagicMock(is_available=True)
+        beads.check_and_record = AsyncMock(return_value=0)
+        beads.on_task_done = AsyncMock(return_value=1)
+        adapter._beads_adapter = beads
+
+        assert await adapter.on_task_completed("bd-cancelled") == 0
+        beads.check_and_record.assert_awaited_once_with("bd-cancelled")
+        beads.on_task_done.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_get_task_auto_detect_source(self, mock_engine):

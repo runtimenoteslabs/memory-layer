@@ -4,9 +4,11 @@ All notable changes to Runtime Memory will be documented in this file.
 
 ## [Unreleased] - 4.0.0
 
-Retrieval decides on relevance first, and an outcome has to name what it is
-about. Both changes come from four pre-registered Tier 2 evaluation runs; each is
-stated below with what it was measured against.
+Retrieval decides on relevance first. An outcome has to name the memories it is
+about, and each memory keeps a record of how often it worked and failed.
+Extraction checks what is already stored before it writes. Most of these changes
+come from four pre-registered Tier 2 evaluation runs and from offline replays of
+their logs; each entry states the evidence behind it.
 
 ### Changed
 
@@ -28,46 +30,48 @@ stated below with what it was measured against.
   `category_boosts` to set your own.
 - **Recency decays from `created_at`,** a memory's age, rather than from
   `updated_at`. `recency_from_created=False` restores the old reading.
-- **The semantic score is scaled relative to the query's best match**
-  (`RetrievalConfig.semantic_scaling`, `relative` by default, `fixed` for 3.x).
-  BM25 is divided by the highest BM25 among the candidates, and cosine, clipped
-  at zero, by the highest cosine, so the best match scores 1.0 and no match
-  still scores 0.0. Under the 3.x scaling, BM25 / (BM25 + 1) and
-  (cos + 1) / 2, a task-length query gives raw BM25 in the tens for most
-  memories, so the keyword part sat near 1 for all of them. Without an
-  embedding backend the top candidates' semantic scores then spanned a few
-  hundredths, less than the confidence weight moves a memory, so the
-  extractor's self-reported confidence decided their order rather than
-  relevance. The order by semantic score alone is unchanged, and on a
-  stratified 120-question sample of LongMemEval-S recall@10 of the evidence
-  sessions went from 0.982 to 0.988; what changes is how much relevance counts
-  against the other signals. `min_vector_similarity` applies to fixed scaling
-  only.
-- **Outcomes are kept as evidence, not a running score.** Each memory counts the
-  times it worked and the times it failed (`worked`, `failed`, schema 3), and
-  every count halves over 90 days. Its outcome score is
-  `(worked - 1.5 x failed) / (worked + 1.5 x failed + 2)`, read at search time so
-  old evidence fades between outcomes. 3.x moved the score +0.2, -0.3 or +0.05
-  per outcome and clamped it to [-1, 1]: one observation read like a settled
-  record, nothing aged, and a memory at the floor lost nothing from another
-  failure. Now one success scores 0.33 and ten score 0.83, and a failure still
-  weighs 1.5 successes. `core.outcomes.OutcomeModel` holds the parameters, as
-  `RetrievalConfig.outcome_model`; `legacy_3x()` sets it to None, which keeps
-  the 3.x steps.
-- **A memory that keeps failing is not retrieved** (`RetrievalConfig.failure_gate`,
-  -0.5). Once relevance is scaled to the query's best match, a lead in relevance
-  outweighs any outcome record, so ranking alone would keep injecting a memory
-  the query matches best however often it failed. Two failures and no successes
-  read -0.6 and gate it; one failure, which may have been blamed on the wrong
-  memory, does not. As the failures decay the memory can be retrieved again.
-  The gate is off with outcome weight 0, so an arm that switches outcome
-  learning off switches it off too, and in `legacy_3x()`.
-- **The Hermes block shows a memory's record as counts,** "worked 2 times,
-  failed 1 time", where it said "has worked before" for one observation and
-  ten alike. The recall trace and the recall and outcome tools report the
-  counts as well.
-- **`EngineConfig.counterpart_credit` is in successes:** 0.25, a quarter of one,
-  where it was 0.05 of score.
+- **The semantic score is scaled to the query's best match**
+  (`RetrievalConfig.semantic_scaling`, `relative` by default). BM25 is divided
+  by the highest BM25 among the candidates, and cosine, clipped at zero, by the
+  highest cosine. The best match scores 1.0 and a memory with no match scores
+  0.0. The 3.x scaling, BM25 / (BM25 + 1) and (cos + 1) / 2, put the keyword
+  part near 1 for almost every memory on a task-length query, whose raw BM25
+  runs into the tens. Without an embedding backend the top candidates then
+  differed by a few hundredths, less than the confidence weight moves a memory,
+  so extraction confidence decided their order. The order by semantic score
+  alone is unchanged; the new scaling gives relevance more weight against the
+  other signals. On a stratified sample of 120 LongMemEval-S questions,
+  recall@10 of the evidence sessions went from 0.982 to 0.988. `fixed` restores
+  the 3.x scaling, and `min_vector_similarity` applies to it only.
+- **Outcomes are counts that fade.** Each memory counts the times it worked and
+  the times it failed (`worked` and `failed`, schema 3), and each count halves
+  every 90 days. The outcome score is
+  `(worked - 1.5 x failed) / (worked + 1.5 x failed + 2)`, computed at search
+  time so that old evidence fades between outcomes. One success scores 0.33
+  and ten score 0.83. 3.x moved the score by +0.2, -0.3 or +0.05 per outcome
+  and clamped it to [-1, 1], so one observation scored like a settled record,
+  nothing aged, and a memory at the floor lost nothing from another failure. A
+  failure still weighs 1.5 successes. `RetrievalConfig.outcome_model` holds
+  the parameters (`core.outcomes.OutcomeModel`); `legacy_3x()` sets it to None,
+  which keeps the 3.x steps.
+- **Retrieval leaves out a memory whose outcome score is -0.5 or lower**
+  (`RetrievalConfig.failure_gate`). With relevance scaled to the query's best
+  match, a lead in relevance outweighs any outcome record, so ranking alone
+  would keep injecting the best-matching memory however often it failed. Two
+  failures and no successes score -0.6 and cross the gate. One failure scores
+  -0.43 and does not, because a single failure may have been blamed on the
+  wrong memory. As the failures decay, the memory can be retrieved again. The
+  gate is off when the outcome weight is 0, so an evaluation arm that turns
+  outcome learning off turns the gate off too, and it is off in
+  `legacy_3x()`.
+- **The Hermes provider traces by default,** to `hermes-trace.jsonl` beside the
+  store; before, it traced only when `RUNTIME_MEMORY_HERMES_TRACE` named a file.
+  `RUNTIME_MEMORY_HERMES_TRACE=off` turns it off. The trace holds the messages
+  recalls searched with, so it contains your prompts.
+- **The Hermes block shows a memory's record as counts,** such as "worked 2
+  times, failed 1 time". It used to say "has worked before" for one
+  observation and for ten. The recall trace and the recall and outcome tools
+  report the counts too.
 - **A retrieval no longer moves `updated_at`.** Reading a memory is not a change
   to it, and while recency decayed from that field every retrieval made a memory
   look newly written.
@@ -88,14 +92,14 @@ stated below with what it was measured against.
   classified new memories against stored ones and kept only the supersede; it
   now stores what it found, so a memory that contradicts another is marked as
   such instead of being left to be out-ranked.
-- **`EngineConfig.counterpart_credit`**, 0.05 by default, 0.0 to turn off. When
-  a memory is recorded as having failed, the memories it conflicts with gain
-  that much. A contract that credits only what was acted on leaves the memory
-  that was right about the same thing with nothing: it was not followed, so it
-  earns nothing, while memories that were followed rise past it. The Tier 2
-  evaluation watched a correct memory fall out of retrieval that way, after
-  which the rule it spoke to broke on 8 of the next 10 tasks. Only a failure
-  credits a counterpart, and only memories not named in the same call.
+- **`EngineConfig.counterpart_credit`**, 0.25 of a success by default, 0.0 to
+  turn off. When a memory is recorded as having failed, each memory it
+  conflicts with is credited with that much. A contract that credits only what
+  was acted on gives nothing to the memory that was right about the same
+  thing, because it was not followed, while memories that were followed rise
+  past it. In the Tier 2 evaluation a correct memory fell out of retrieval that
+  way, and the rule it covered then broke on 8 of the next 10 tasks. Only a
+  failure credits a counterpart, and never a memory named in the same call.
 - **`RetrievalConfig.legacy_3x()`**, the 3.x weights, category boosts,
   single-stage scoring and recency reading, so evaluations run against 3.x stay
   reproducible and callers who tuned for them can ask by name.
@@ -109,37 +113,68 @@ stated below with what it was measured against.
   chooses keyword matching and silences the warning.
 - **`RUNTIME_MEMORY_RELEVANCE_POOL_FACTOR=off`** (or `none`) turns the two-stage
   pool off from the environment.
-- **Extraction is shown what is already stored**
-  (`ExtractionConfig.stored_context_limit`, 50 by default, 0 for the old
-  behaviour). The call is told not to extract what a stored memory already
-  says, in any words; to name the stored memory a new one updates, conflicts
-  with or extends; and to list the stored memories the conversation confirmed.
-  Before, nothing stopped a session from storing a rule again in new words, and
-  a store written by a few sessions of the same project could hold five copies
-  of each rule, which then took several of a recall's slots. Relations were
-  found by a separate classifier call per candidate pair, among memories of the
-  same category that shared words, so a restatement filed under another
-  category was never compared at all. Now they come from the call extraction
-  already makes. A project with more stored memories than the limit shows the
-  ones most relevant to the transcript.
+- **Extraction is shown the memories already stored**
+  (`ExtractionConfig.stored_context_limit`, 50 by default, 0 for the 3.x
+  behaviour). The extraction call skips anything a stored memory already says,
+  however it is worded. It names the stored memory that each new one updates,
+  conflicts with or extends, and it lists the stored memories that the
+  conversation confirmed. In 3.x a session could store a rule again in new words, and a
+  store written by a few sessions of one project held about five copies of
+  each rule, which then filled several of a recall's slots. Relations came from
+  a separate classifier call for each candidate pair, and only memories of the
+  same category that shared words were compared, so a restatement filed under
+  another category was never checked. They now come from the extraction call
+  itself. When a project has more stored memories than the limit, the call is
+  shown the ones most relevant to the transcript.
 - **`MemoryEngine.confirm()`** and **`EngineConfig.skip_exact_duplicates`**, on
-  by default. `add` with the same text as a live memory in the same project,
-  once case, spacing and end punctuation are set aside, returns that memory
-  and counts a confirmation (`metadata["confirmations"]`,
-  `metadata["last_confirmed"]`) instead of storing a copy. Nothing looser is
-  merged: two notes that say opposite things can share every word, so a
-  similarity threshold cannot tell a restatement from a contradiction.
-  Confirmations from extraction land in the same place, and the Hermes trace
-  records them as their own `confirm` event. Nothing ranks on them yet.
-- **The Hermes block shows contradictions.** Two recalled memories stored as
-  contradicting each other are both marked, each naming the other, and the
-  block asks the model to check which holds before relying on either. A
-  recalled memory that contradicts one not recalled brings that one in under
-  the recall, up to `RUNTIME_MEMORY_CONFLICT_COUNTERPARTS` (3), so a contested
-  memory never arrives alone looking settled. Ranking alone did not keep the
-  right side of a contradiction in the prompt: the Tier 2 evaluation watched a
-  correct memory drop out while the wrong one it contradicted stayed. The
-  recall trace records the counterparts added and the marks shown, and
+  by default. When `add` is given the same text as a live memory in the same
+  project, ignoring case, spacing and end punctuation, it returns that memory
+  and records a confirmation (`metadata["confirmations"]` and
+  `metadata["last_confirmed"]`) instead of storing a copy. Only exact matches
+  are merged this way: two notes that say opposite things can share every word,
+  so a similarity threshold cannot tell a restatement from a contradiction.
+  Confirmations from extraction are recorded the same way, and the Hermes trace
+  logs them as `confirm` events. Ranking does not use them yet.
+- **Hermes sessions record their own outcomes.** When a session ends, the
+  provider reads the last test run in its tool results (pytest, unittest, Jest,
+  Cargo or Go) and records that verdict against the recalled memories the
+  session acted on: those the agent named by id, `command` memories whose
+  command it ran, and, with extraction on, those the extraction call judged it
+  followed. No other recalled memory gets the verdict, and a session with no
+  test run records nothing. Before, outcomes came only from the agent calling
+  `runtimememory_outcome`, which it did not do once in the Tier 3 evaluation.
+  The injected block now asks the agent to name the memories it uses, because
+  unasked it never did. `RUNTIME_MEMORY_SESSION_OUTCOMES=false` and
+  `RUNTIME_MEMORY_ASK_CITATIONS=false` turn these off. The rules live in
+  `core.attribution`, behind an `Attributor` protocol.
+- **Extraction reports what it cost** (`ExtractionResult.usage`: model, calls,
+  and input and output tokens, thinking included), and the Hermes trace records
+  it as a `usage` event, whether or not the extraction succeeded. Each recall
+  in the trace records `block_chars`, the length of the injected block. Before,
+  nothing recorded extraction's tokens, so its cost could only be estimated
+  from transcript lengths.
+- **`mem why`** runs a search without recording anything and shows, for each
+  result, the score and the signals behind it: semantic score, outcome value
+  and record, recency and confidence. It then lists every candidate left out
+  and the stage that left it out: the failure gate, the relevance pool, the
+  minimum score, near-duplicates, or the result limit. `MemoryEngine.explain()`
+  and `HybridRetriever.rank()` return the same breakdown, and `search()` is
+  built on `rank()`, so the explanation and the search cannot disagree.
+  `SearchResult.outcome_signal` records the outcome value a score used.
+- **`mem stats` reports outcome records and the Hermes trace:** how many
+  memories have a record, the total successes and failures, how many the
+  failure gate leaves out, the search mode, and, from the trace, recalls by
+  search mode, the average injected block size, outcomes by origin and
+  extraction tokens.
+- **The Hermes block shows contradictions.** When two recalled memories are
+  stored as contradicting each other, each is marked with the other's id, and
+  the block asks the model to check which one holds before relying on either.
+  When a recalled memory contradicts one that was not recalled, that memory is
+  added below the recall, up to `RUNTIME_MEMORY_CONFLICT_COUNTERPARTS` (3), so
+  the model sees both sides. Ranking alone did not keep the right side of a
+  contradiction in the prompt: in the Tier 2 evaluation a correct memory
+  dropped out while the wrong one it contradicted stayed. The recall trace
+  records the counterparts added and the marks shown, and
   `runtimememory_recall` lists each result's contradictions.
 
 ### Fixed
@@ -151,6 +186,22 @@ stated below with what it was measured against.
 - **The Hermes guide still described the relevance pool as off by default.**
 - **The Hermes guide said an outcome without ids scores the whole recall,** which
   4.0 declines.
+- **`mem` commands could print their result and then never exit.** The CLI
+  opened the engine and did not close it, and each pooled database connection
+  runs a thread the interpreter waits for at exit. The engine now closes when
+  the command ends.
+- **The extraction transcript left out tool calls,** so extraction never saw the
+  commands an agent ran. They are now included, and tool results are unwrapped
+  from Hermes' JSON.
+- **Syncing a single task credited memories whatever the task's status.**
+  `mem tasks-sync --task` and the `tasks_sync` tool recorded "worked" for the
+  memories linked to a Claude Code task that was still pending, and sent every
+  Beads task to the "done" path, so a cancelled task counted as a success. Both
+  now read the task's status first; a Beads task records what its status calls
+  for.
+- **The deprecation notices for `claude_code.daemon` and `claude_code.hooks`
+  pointed to `hooks/hooks.json`,** which does not exist. They now name the hooks
+  that `mem install-plugin` writes to `.claude/settings.json`.
 - **Extraction failed whenever the model began its answer with a thinking
   block.** Claude 5 models think by default, and the response was read from its
   first block, so such a response failed the whole extraction with
@@ -165,12 +216,12 @@ stated below with what it was measured against.
 - Callers of `record_outcome` that relied on the no-ids default must pass the ids
   the outcome is about. The provider's recall results and the injected block both
   carry them.
-- Stores migrate to schema 3 on open. A stored 3.x score becomes the counts it
-  stands for, +0.2 per success and -0.3 per failure, dated from the memory's
-  last update. The stored score is left as it was until the next outcome, but
-  ranking reads the counts.
-- Code that asserted exact outcome scores after `record_outcome` will see the
-  new values; `legacy_3x()` keeps the old ones.
+- Stores migrate to schema 3 when opened. Each stored 3.x score is converted to
+  the counts it stands for, at +0.2 per success and -0.3 per failure, dated
+  from the memory's last update. The stored score keeps its 3.x value until the
+  next outcome, but ranking uses the counts.
+- `record_outcome` produces different outcome scores. Code that checks exact
+  values gets the new ones; `legacy_3x()` keeps the 3.x steps.
 
 ## [3.1.0] - 2026-09-17
 

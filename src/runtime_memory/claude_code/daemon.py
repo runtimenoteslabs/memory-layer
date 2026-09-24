@@ -2,15 +2,15 @@
 
 .. deprecated:: 2.0.0
     The daemon-based architecture is deprecated in favor of the native
-    Claude Code 2.1.1+ plugin system. Use native hooks (hooks/hooks.json)
-    and Agent Skills (skills/*.md) instead.
+    Claude Code 2.1.1+ plugin system: the hooks that ``mem install-plugin``
+    writes to ``.claude/settings.json``, and the Agent Skills in
+    ``.claude/skills/``.
 
     Migration guide:
-    - SessionStart hook: Use hooks/hooks.json SessionStart
-    - SessionEnd hook: Use hooks/hooks.json SessionEnd
-    - PreCompact hook: Use hooks/hooks.json PreCompact
-    - Auto-extraction: Use PreCompact hook with 'mem extract --auto'
-    - CLAUDE.md updates: Use 'mem context --inject' in SessionStart hook
+    - SessionStart: the installed SessionStart hook runs ``mem context``
+    - SessionEnd: the installed SessionEnd hook runs ``mem session end``
+    - Auto-extraction: add a PreCompact hook to ``.claude/settings.json`` that
+      runs ``mem extract --auto``
 
 Watches Claude Code session files and automatically:
 - Extracts learnings from completed sessions
@@ -25,8 +25,8 @@ import warnings
 # Emit deprecation warning when module is imported
 warnings.warn(
     "The daemon module is deprecated as of v2.0.0. "
-    "Use the native plugin system with hooks/hooks.json instead. "
-    "See the repository hooks/hooks.json for the v2 hook configuration.",
+    "Use the Claude Code plugin hooks that `mem install-plugin` writes to "
+    ".claude/settings.json instead.",
     DeprecationWarning,
     stacklevel=2,
 )

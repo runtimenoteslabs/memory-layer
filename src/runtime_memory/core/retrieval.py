@@ -417,6 +417,29 @@ class BM25Index:
         return len(self._docs)
 
 
+@dataclass
+class Ranking:
+    """Every stage of one search, for explaining it."""
+
+    results: list[SearchResult] = field(default_factory=list)
+    """What the search returns."""
+
+    scored: list[SearchResult] = field(default_factory=list)
+    """Every candidate that passed the failure gate, best score first."""
+
+    gated: list[Memory] = field(default_factory=list)
+    """Candidates left out by the failure gate."""
+
+    outside_pool: set[str] = field(default_factory=set)
+    """Scored candidates the relevance pool left out."""
+
+    below_min_score: set[str] = field(default_factory=set)
+    """Pool members whose score was under ``min_score``."""
+
+    duplicates: set[str] = field(default_factory=set)
+    """Results dropped as near-duplicates of a better one."""
+
+
 class HybridRetriever:
     """Hybrid retrieval system combining BM25 and vector search.
 
@@ -554,8 +577,43 @@ class HybridRetriever:
         Returns:
             List of search results sorted by relevance.
         """
+        ranking = await self.rank(
+            query,
+            limit=limit,
+            category=category,
+            project=project,
+            include_archived=include_archived,
+            min_score=min_score,
+        )
+        return ranking.results
+
+    async def rank(
+        self,
+        query: str,
+        limit: int | None = None,
+        category: MemoryCategory | None = None,
+        project: str | None = None,
+        include_archived: bool = False,
+        min_score: float = 0.0,
+    ) -> Ranking:
+        """Run a search and keep what each stage did, for explaining it.
+
+        ``search`` returns this ranking's ``results``, so an explanation cannot
+        drift from what a search does.
+
+        Args:
+            query: Search query text.
+            limit: Maximum number of results.
+            category: Filter by category.
+            project: Filter by project.
+            include_archived: Whether to include archived memories.
+            min_score: Minimum score threshold.
+
+        Returns:
+            The ranking, stage by stage.
+        """
         if not self._memories:
-            return []
+            return Ranking()
 
         limit = min(limit or self.config.default_limit, self.config.max_limit)
 
@@ -573,20 +631,22 @@ class HybridRetriever:
         # See RetrievalConfig.failure_gate. Gated before relevance is decided, so
         # the next most relevant memory takes the gated one's place in the pool.
         # Outcome weight 0 means outcome learning is off, so the gate is off too.
+        gated: list[Memory] = []
         if (
             self.config.failure_gate is not None
             and self.config.outcome_model is not None
             and self.config.outcome_weight > 0
         ):
+            gated = [m for m in candidates if self._outcome(m) <= self.config.failure_gate]
             candidates = [m for m in candidates if self._outcome(m) > self.config.failure_gate]
 
         if not candidates:
-            return []
+            return Ranking(gated=gated)
 
         # Score all candidates. Relative scaling needs the best match among them,
         # so the semantic scores are computed together before anything is combined.
         semantic_scores = self._semantic_scores(candidates, query, query_embedding)
-        results = [
+        scored = [
             self._score_memory(memory, semantic)
             for memory, semantic in zip(candidates, semantic_scores, strict=True)
         ]
@@ -594,18 +654,29 @@ class HybridRetriever:
         # See RetrievalConfig.relevance_pool_factor. Relevance is decided before
         # min_score, so a relevant memory with a poor record is not replaced in
         # the pool by a less relevant one that happens to clear the threshold.
+        results = scored
         if self.config.relevance_pool_factor is not None:
             results = self._relevance_pool(results, limit)
+        pool = {r.memory.id for r in results}
 
         results = [result for result in results if result.score >= min_score]
+        passed = {r.memory.id for r in results}
 
         # Sort by score descending
         results.sort(key=lambda r: r.score, reverse=True)
 
         # Deduplicate similar results
-        results = self._deduplicate(results)
+        kept = self._deduplicate(results)
+        duplicates = {r.memory.id for r in results} - {r.memory.id for r in kept}
 
-        return results[:limit]
+        return Ranking(
+            results=kept[:limit],
+            scored=sorted(scored, key=lambda r: r.score, reverse=True),
+            gated=gated,
+            outside_pool={r.memory.id for r in scored} - pool,
+            below_min_score=pool - passed,
+            duplicates=duplicates,
+        )
 
     def _relevance_pool(self, results: list[SearchResult], limit: int) -> list[SearchResult]:
         """Keep the candidates most relevant to the query, the first retrieval stage.
@@ -723,7 +794,8 @@ class HybridRetriever:
         frequency_score = self._calculate_frequency_score(memory)
 
         # Outcome in -1 to 1, normalized to 0-1.
-        outcome_score = (self._outcome(memory) + 1.0) / 2.0
+        outcome = self._outcome(memory)
+        outcome_score = (outcome + 1.0) / 2.0
 
         # Extraction confidence, already 0-1
         confidence_score = memory.confidence
@@ -747,6 +819,7 @@ class HybridRetriever:
             recency_score=recency_score,
             frequency_score=frequency_score,
             category_boost=category_boost,
+            outcome_signal=outcome,
         )
 
     def _calculate_semantic_score(

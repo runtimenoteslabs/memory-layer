@@ -3,8 +3,8 @@
 Before 4.0.0 an outcome moved a memory's score by a fixed step, +0.2 worked,
 -0.3 failed, +0.05 partial, clamped to [-1, 1]. One observation then read like a
 settled record, nothing aged, and a memory at the floor lost nothing more from
-another failure. The Tier 2 evaluation watched a memory fail on every use while
-keeping its place that way.
+another failure. In the Tier 2 evaluation a memory failed on every use and kept
+its place that way.
 
 A memory now keeps decayed counts of the times it worked and the times it failed.
 Its outcome score is their difference over their total plus a prior, so a single

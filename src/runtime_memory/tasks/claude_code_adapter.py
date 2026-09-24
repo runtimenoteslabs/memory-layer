@@ -241,9 +241,11 @@ class ClaudeCodeAdapter:
     # =========================================================================
 
     async def on_task_completed(self, task_id: str) -> int:
-        """Handle a task being marked as completed.
+        """Record "worked" for the memories linked to a task, if it is completed.
 
-        Records "worked" outcome for all linked memories.
+        The task's status is read first. A caller naming a single task, such as
+        ``mem tasks-sync --task``, could otherwise credit the memories of a task
+        that is still pending.
 
         Args:
             task_id: The task ID.
@@ -254,6 +256,11 @@ class ClaudeCodeAdapter:
         self._ensure_initialized()
 
         if not self.auto_outcome_enabled:
+            return 0
+
+        task = self._parser.get_task(task_id)
+        if task is None or not task.is_completed:
+            logger.info(f"Task {task_id} is not completed; no outcome recorded")
             return 0
 
         # Get unresolved links for this task

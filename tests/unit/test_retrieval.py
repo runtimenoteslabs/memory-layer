@@ -1259,3 +1259,76 @@ class TestFailureGate:
         failing, other = self.pair(failed=2.0)
 
         assert await self._top(RetrievalConfig.legacy_3x(), failing, other) is failing
+
+
+class TestRank:
+    """rank() keeps every stage of a search, and search() returns its results."""
+
+    QUERY = "clear the pytest cache when tests fail randomly"
+
+    @staticmethod
+    def memories() -> list[Memory]:
+        return [
+            create_memory("Clear the pytest cache when tests fail randomly"),
+            create_memory("Tests fail randomly when the cache is stale"),
+            create_memory("Randomly failing tests usually share state"),
+            create_memory("Pin dependency versions in the lockfile"),
+        ]
+
+    async def test_search_returns_the_rankings_results(self) -> None:
+        retriever = HybridRetriever(MockEmbeddingProvider(), RetrievalConfig())
+        for memory in self.memories():
+            retriever.add_memory(memory)
+
+        ranking = await retriever.rank(self.QUERY, limit=2)
+        results = await retriever.search(self.QUERY, limit=2)
+
+        assert [r.memory.id for r in ranking.results] == [r.memory.id for r in results]
+
+    async def test_each_left_out_candidate_says_where(self) -> None:
+        retriever = HybridRetriever(MockEmbeddingProvider(), RetrievalConfig(relevance_pool_factor=1.0))
+        closest, second, third, unrelated = self.memories()
+        closest.failed, closest.evidence_at = 2.0, closest.created_at
+        for memory in (closest, second, third, unrelated):
+            retriever.add_memory(memory)
+
+        ranking = await retriever.rank(self.QUERY, limit=1)
+
+        assert [m.id for m in ranking.gated] == [closest.id]
+        assert [r.memory.id for r in ranking.results] == [second.id]
+        assert third.id in ranking.outside_pool
+        assert closest.id not in {r.memory.id for r in ranking.scored}
+
+    async def test_min_score_is_recorded(self) -> None:
+        retriever = HybridRetriever(MockEmbeddingProvider(), RetrievalConfig())
+        for memory in self.memories()[:2]:
+            retriever.add_memory(memory)
+
+        ranking = await retriever.rank(self.QUERY, limit=2, min_score=5.0)
+
+        assert ranking.results == []
+        assert len(ranking.below_min_score) == 2
+
+    async def test_near_duplicates_are_recorded(self) -> None:
+        provider = MockEmbeddingProvider()
+        retriever = HybridRetriever(provider, RetrievalConfig())
+        first = create_memory("Clear the pytest cache when tests fail randomly")
+        copy = create_memory("Clear the pytest cache when tests fail randomly!")
+        vector = (await provider.embed(first.content)).embedding
+        retriever.add_memory(first, vector)
+        retriever.add_memory(copy, vector)
+
+        ranking = await retriever.rank(self.QUERY, limit=2)
+
+        assert len(ranking.results) == 1
+        assert len(ranking.duplicates) == 1
+
+    async def test_the_score_carries_its_outcome_signal(self) -> None:
+        retriever = HybridRetriever(MockEmbeddingProvider(), RetrievalConfig())
+        memory = create_memory("Clear the pytest cache when tests fail randomly")
+        memory.worked, memory.evidence_at = 1.0, memory.created_at
+        retriever.add_memory(memory)
+
+        (result,) = await retriever.search(self.QUERY, limit=1)
+
+        assert result.outcome_signal == pytest.approx(1 / 3)

@@ -19,7 +19,7 @@ import asyncio
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -63,7 +63,7 @@ EXTRACTION_USER_PROMPT = """Extract actionable memories from this conversation t
 <transcript>
 {transcript}
 </transcript>
-{stored_section}
+{stored_section}{recalled_section}
 Return a JSON object with this exact structure:
 {{
   "memories": [
@@ -80,6 +80,7 @@ Return a JSON object with this exact structure:
     }}
   ],
   "confirmed": ["handles of stored memories this conversation confirmed without adding to them"],
+  "acted_on": [{{"handle": "handle of a recalled memory the agent acted on", "evidence": "short quote from the transcript"}}],
   "summary": "One sentence summary of the conversation"
 }}
 
@@ -89,6 +90,7 @@ Guidelines:
 - entities: Include file names, function names, package names, error types
 - Each memory should be self-contained and understandable without context
 - relates_to, relation and confirmed refer to stored memories listed above; leave them null or empty when none are listed
+- acted_on refers to recalled memories listed above; leave it empty when none are listed
 
 Return ONLY the JSON object, no other text."""
 
@@ -103,6 +105,17 @@ These memories are already stored for this project, each with a handle:
 - If the conversation shows a stored memory is wrong or out of date, extract the correct version, set "relates_to" to that memory's handle, and set "relation" to "updates" if the new memory should replace it, or "conflicts" if the two contradict and the conversation does not settle which is right.
 - If a new memory adds to a stored one without contradicting it, set "relates_to" to its handle and "relation" to "extends".
 - If the conversation confirms a stored memory without adding anything, do not extract it again; put its handle in "confirmed".
+"""
+
+RECALLED_MEMORIES_SECTION = """
+These memories were shown to the agent during this conversation, each with a handle:
+
+<recalled>
+{recalled}
+</recalled>
+
+- In "acted_on", list each recalled memory whose advice the agent followed in this conversation, with a short quote from the transcript that shows it.
+- Leave out a recalled memory the agent was shown but did not follow, or went against.
 """
 
 CONFLICT_DETECTION_PROMPT = """Compare these two memories and determine their relationship.
@@ -308,6 +321,16 @@ class ConflictResult:
 
 
 @dataclass
+class ModelUsage:
+    """What an extraction's model calls consumed."""
+
+    model: str
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass
 class ExtractionResult:
     """Result of extracting memories from a transcript."""
 
@@ -329,6 +352,14 @@ class ExtractionResult:
     confirmed_ids: list[str] = field(default_factory=list)
     """Stored memories the conversation confirmed without adding to, which were
     therefore not extracted again."""
+
+    acted_on: list[tuple[str, str]] = field(default_factory=list)
+    """Recalled memories the call judged the agent followed, as (memory id,
+    quoted evidence). Empty unless the call was shown the recalled memories."""
+
+    usage: ModelUsage | None = None
+    """Model calls and tokens this extraction used, including any conflict
+    classifier calls. None when it made no call."""
 
     pii_removed: int = 0
     """Number of PII instances removed."""
@@ -556,6 +587,8 @@ class MemoryExtractor:
             self.config.rate_limit_rpm,
             self.config.rate_limit_tpm,
         )
+        # Reset by each extraction, added to by every model call it makes.
+        self._usage = ModelUsage(model=self.config.model)
 
     def _get_client(self) -> Any:
         """Get or create the Anthropic client."""
@@ -777,6 +810,10 @@ class MemoryExtractor:
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
+        usage = getattr(response, "usage", None)
+        self._usage.calls += 1
+        self._usage.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+        self._usage.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
 
         if response.stop_reason == "refusal":
             raise ValueError("The model declined the request")
@@ -908,6 +945,45 @@ class MemoryExtractor:
         shown = (handles.get(str(handle).strip()) for handle in confirmed)
         return list(dict.fromkeys(memory.id for memory in shown if memory is not None))
 
+    def _recalled_section(self, handles: dict[str, Memory]) -> str:
+        """Render the memories the agent was shown, by handle."""
+        if not handles:
+            return ""
+        lines = "\n".join(
+            f"[{handle}] ({memory.category.value}) {self.sanitize_for_prompt(memory.content)}"
+            for handle, memory in handles.items()
+        )
+        return RECALLED_MEMORIES_SECTION.format(recalled=lines)
+
+    @staticmethod
+    def _acted_on(response: str, handles: dict[str, Memory]) -> list[tuple[str, str]]:
+        """The recalled memories a response says the agent followed.
+
+        Args:
+            response: Raw LLM response, already known to hold valid JSON.
+            handles: The recalled memories the call was shown, by handle.
+
+        Returns:
+            (memory id, evidence) pairs, once per memory, in the order listed.
+            Handles that were not shown, and a missing or malformed field, give
+            nothing.
+        """
+        if not handles:
+            return []
+        json_match = re.search(r'\{[\s\S]*\}', response)
+        listed = json.loads(json_match.group()).get("acted_on", []) if json_match else []
+        if not isinstance(listed, list):
+            return []
+        found: dict[str, str] = {}
+        for entry in listed:
+            handle, evidence = (
+                (entry.get("handle"), entry.get("evidence", "")) if isinstance(entry, dict) else (entry, "")
+            )
+            memory = handles.get(str(handle).strip())
+            if memory is not None and memory.id not in found:
+                found[memory.id] = str(evidence).strip()
+        return list(found.items())
+
     def _stored_section(self, handles: dict[str, Memory]) -> str:
         """Render the stored memories an extraction call is shown, by handle."""
         if not handles:
@@ -967,6 +1043,7 @@ class MemoryExtractor:
         project: str | None = None,
         existing_memories: list[Memory] | None = None,
         stored_memories: list[Memory] | None = None,
+        recalled_memories: list[Memory] | None = None,
     ) -> ExtractionResult:
         """Extract memories from a conversation transcript.
 
@@ -978,12 +1055,15 @@ class MemoryExtractor:
             stored_memories: Memories to show the extraction call, so it leaves
                 out what they already say and names what it updates, conflicts
                 with, extends or confirms. See ``stored_context_limit``.
+            recalled_memories: Memories the agent was shown during the
+                conversation, so the call can name the ones it followed.
 
         Returns:
             ExtractionResult with extracted memories.
         """
         start_time = time.time()
         transcript_length = len(transcript)
+        self._usage = ModelUsage(model=self.config.model)
 
         # Validate transcript length
         if transcript_length < self.config.min_transcript_length:
@@ -1022,10 +1102,14 @@ class MemoryExtractor:
         # fewer tokens, and nothing for the model to miscopy.
         handles = {f"S{i}": memory for i, memory in enumerate(stored_memories or [], start=1)}
         stored_section = self._stored_section(handles)
+        recalled = {f"R{i}": memory for i, memory in enumerate(recalled_memories or [], start=1)}
+        recalled_section = self._recalled_section(recalled)
         user_prompt = EXTRACTION_USER_PROMPT.format(
-            transcript=transcript, stored_section=stored_section
+            transcript=transcript,
+            stored_section=stored_section,
+            recalled_section=recalled_section,
         )
-        estimated_tokens = (len(transcript) + len(stored_section)) // 4 + 1000
+        estimated_tokens = (len(transcript) + len(stored_section) + len(recalled_section)) // 4 + 1000
 
         try:
             # Call LLM
@@ -1067,6 +1151,8 @@ class MemoryExtractor:
                 extraction_time_ms=extraction_time,
                 conflicts=conflicts,
                 confirmed_ids=confirmed_ids,
+                acted_on=self._acted_on(response, recalled),
+                usage=self._usage_so_far(),
                 pii_removed=pii_removed,
                 injection_attempts=injection_attempts,
                 raw_response=response,
@@ -1080,10 +1166,15 @@ class MemoryExtractor:
                 summary="",
                 transcript_length=transcript_length,
                 extraction_time_ms=extraction_time,
+                usage=self._usage_so_far(),
                 pii_removed=pii_removed,
                 injection_attempts=injection_attempts,
                 error=str(e),
             )
+
+    def _usage_so_far(self) -> ModelUsage | None:
+        """This extraction's usage, or None when it made no model call."""
+        return replace(self._usage) if self._usage.calls else None
 
     # =========================================================================
     # Conflict Detection
@@ -1241,6 +1332,7 @@ class MemoryExtractor:
         transcript: str,
         engine: MemoryEngine,
         project: str | None = None,
+        recalled: list[Memory] | None = None,
     ) -> ExtractionResult:
         """Extract memories and store them in the engine.
 
@@ -1248,6 +1340,9 @@ class MemoryExtractor:
             transcript: Conversation transcript.
             engine: Memory engine to store in.
             project: Project scope.
+            recalled: Memories the agent was shown during the conversation. The
+                result's ``acted_on`` names the ones the call judged it followed;
+                recording an outcome for them is left to the caller.
 
         Returns:
             ExtractionResult with stored memories.
@@ -1267,6 +1362,7 @@ class MemoryExtractor:
             project=project,
             existing_memories=existing_memories,
             stored_memories=stored or None,
+            recalled_memories=recalled or None,
         )
 
         if not result.success:

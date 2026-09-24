@@ -36,7 +36,7 @@ from runtime_memory.core.models import (
     SearchResult,
 )
 from runtime_memory.core.paths import default_db_path
-from runtime_memory.core.retrieval import HybridRetriever, RetrievalConfig
+from runtime_memory.core.retrieval import HybridRetriever, Ranking, RetrievalConfig
 from runtime_memory.core.storage import (
     MemoryNotFoundError,
     MemoryStorage,
@@ -89,13 +89,13 @@ class EngineConfig:
     """How many successes a memory is credited with when a memory it conflicts
     with is recorded as having failed. 0.0 turns it off.
 
-    A contract that credits only what was acted on leaves the memory that was
-    right about the same thing with nothing: it was not followed, so it earns
-    nothing, while memories that were followed rise past it. The Tier 2
-    evaluation watched a correct memory fall out of retrieval that way, after
-    which the rule it spoke to broke on 8 of the next 10 tasks. The credit is
-    small, a quarter of a success, because a conflict is evidence about the
-    pair, not a demonstration that this memory works."""
+    A contract that credits only what was acted on gives nothing to the memory
+    that was right about the same thing, because it was not followed, while
+    memories that were followed rise past it. In the Tier 2 evaluation a
+    correct memory fell out of retrieval that way, and the rule it covered then
+    broke on 8 of the next 10 tasks. The credit is a quarter of a success
+    because a conflict is evidence about the pair, and says little about
+    whether this memory works."""
 
     auto_archive_on_search: bool = False
     """Whether to run auto-archival after searches (can impact performance)."""
@@ -715,6 +715,34 @@ class MemoryEngine:
 
         logger.debug(f"Search for '{query}' returned {len(results)} results")
         return results
+
+    async def explain(
+        self,
+        query: str,
+        limit: int = 10,
+        category: MemoryCategory | None = None,
+        project: str | None = None,
+        min_score: float = 0.0,
+    ) -> Ranking:
+        """Rank memories for a query as ``search`` would, keeping every stage.
+
+        Nothing is recorded: use counts, the last search and auto-archival are
+        left alone, so explaining a search does not change the next one.
+
+        Args:
+            query: Search query text.
+            limit: Maximum number of results.
+            category: Filter by category.
+            project: Filter by project.
+            min_score: Minimum score threshold.
+
+        Returns:
+            The ranking: the results, and why every other candidate is not one.
+        """
+        self._ensure_initialized()
+        return await self._retriever.rank(
+            query=query, limit=limit, category=category, project=project, min_score=min_score
+        )
 
     async def list(
         self,

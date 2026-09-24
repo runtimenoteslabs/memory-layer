@@ -1106,3 +1106,102 @@ class TestResponseBlocks:
 
         assert not result.success
         assert "declined" in result.error
+
+
+class TestRecalledMemories:
+    """The extraction call names the recalled memories the session followed."""
+
+    RECALLED = (
+        Memory(id="m-uv", content="Install dependencies with uv", category=MemoryCategory.COMMAND),
+        Memory(id="m-ci", content="CI runs on every push", category=MemoryCategory.CONVENTION),
+    )
+
+    async def _extract(self, payload: dict) -> tuple[ExtractionResult, MagicMock]:
+        extractor = MemoryExtractor()
+        extractor._client = _client_answering(payload)
+        result = await extractor.extract_from_transcript(
+            TRANSCRIPT, project="p", recalled_memories=list(self.RECALLED)
+        )
+        return result, extractor
+
+    async def test_the_prompt_lists_recalled_memories_by_handle(self) -> None:
+        _, extractor = await self._extract({"memories": [], "summary": ""})
+
+        prompt = extractor._client.messages.create.await_args.kwargs["messages"][0]["content"]
+        assert "<recalled>" in prompt
+        assert "[R1] (command) Install dependencies with uv" in prompt
+
+    async def test_followed_handles_become_memory_ids(self) -> None:
+        result, _ = await self._extract(
+            {
+                "memories": [],
+                "acted_on": [
+                    {"handle": "R1", "evidence": "ran uv sync"},
+                    {"handle": "R1", "evidence": "again"},
+                    {"handle": "R9", "evidence": "not shown"},
+                    "R2",
+                ],
+                "summary": "",
+            }
+        )
+
+        assert result.acted_on == [("m-uv", "ran uv sync"), ("m-ci", "")]
+
+    async def test_without_recalled_memories_nothing_is_attributed(self) -> None:
+        extractor = MemoryExtractor()
+        extractor._client = _client_answering(
+            {"memories": [], "acted_on": [{"handle": "R1"}], "summary": ""}
+        )
+
+        result = await extractor.extract_from_transcript(TRANSCRIPT, project="p")
+
+        prompt = extractor._client.messages.create.await_args.kwargs["messages"][0]["content"]
+        assert "<recalled>" not in prompt
+        assert result.acted_on == []
+
+
+class TestUsage:
+    """An extraction reports the tokens its model calls used."""
+
+    @staticmethod
+    def _client(text: str, input_tokens: int = 1200, output_tokens: int = 300) -> MagicMock:
+        client = MagicMock()
+        response = MagicMock()
+        response.stop_reason = "end_turn"
+        response.content = [MagicMock(type="text", text=text)]
+        response.usage = MagicMock(input_tokens=input_tokens, output_tokens=output_tokens)
+        client.messages.create = AsyncMock(return_value=response)
+        return client
+
+    async def test_one_call_is_counted(self) -> None:
+        extractor = MemoryExtractor()
+        extractor._client = self._client(json.dumps({"memories": [], "summary": ""}))
+
+        result = await extractor.extract_from_transcript(TRANSCRIPT, project="p")
+
+        assert (result.usage.calls, result.usage.input_tokens, result.usage.output_tokens) == (1, 1200, 300)
+        assert result.usage.model == extractor.config.model
+
+    async def test_a_failed_parse_still_reports_the_call(self) -> None:
+        """The call was made and paid for, whatever its answer."""
+        extractor = MemoryExtractor()
+        extractor._client = self._client("not json")
+
+        result = await extractor.extract_from_transcript(TRANSCRIPT, project="p")
+
+        assert not result.success
+        assert result.usage.calls == 1
+
+    async def test_no_call_reports_no_usage(self) -> None:
+        result = await MemoryExtractor().extract_from_transcript("too short", project="p")
+
+        assert result.usage is None
+
+    async def test_each_extraction_counts_its_own_calls(self) -> None:
+        extractor = MemoryExtractor()
+        extractor._client = self._client(json.dumps({"memories": [], "summary": ""}))
+
+        await extractor.extract_from_transcript(TRANSCRIPT, project="p")
+        second = await extractor.extract_from_transcript(TRANSCRIPT, project="p")
+
+        assert second.usage.calls == 1

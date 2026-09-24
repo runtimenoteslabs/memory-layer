@@ -453,7 +453,11 @@ class UnifiedTaskAdapter:
         task_id: str,
         source: TaskSource | None = None,
     ) -> int:
-        """Handle a task being marked as completed.
+        """Record the outcome a task's current status calls for.
+
+        Each adapter reads the task's status first, so naming a task that is
+        pending, or a Beads task that was cancelled, does not credit its linked
+        memories as having worked.
 
         Args:
             task_id: The task ID.
@@ -472,7 +476,7 @@ class UnifiedTaskAdapter:
                 source = TaskSource.BEADS
 
         if source == TaskSource.BEADS and self.beads_available:
-            return await self._beads_adapter.on_task_done(task_id)
+            return await self._beads_adapter.check_and_record(task_id)
         elif source == TaskSource.CLAUDE_CODE and self.claude_code_available:
             return await self._claude_adapter.on_task_completed(task_id)
 

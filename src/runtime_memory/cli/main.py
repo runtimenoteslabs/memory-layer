@@ -18,15 +18,19 @@ import asyncio
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 
 from runtime_memory import __version__
 from runtime_memory.core.logging import get_logger, setup_logging
-from runtime_memory.core.models import MemoryCategory, MemoryScope, MemorySource, Outcome
+from runtime_memory.core.models import Memory, MemoryCategory, MemoryScope, MemorySource, Outcome
 from runtime_memory.core.paths import default_db_path, store_dir
+
+if TYPE_CHECKING:
+    from runtime_memory.core.retrieval import Ranking
 
 logger = get_logger(__name__)
 
@@ -60,6 +64,12 @@ def get_engine():
     engine = MemoryEngine(config=config)
     # Initialize the engine synchronously
     asyncio.get_event_loop().run_until_complete(engine.initialize())
+    # Close it when the command ends. Each pooled connection runs a non-daemon
+    # aiosqlite thread, and the interpreter waits for those before exiting, so
+    # an engine left open made a command print its result and then never exit.
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None:
+        ctx.call_on_close(lambda: run_async(engine.close()))
     return engine
 
 
@@ -271,6 +281,117 @@ def search_memories(
     except Exception as e:
         logger.error(f"Search failed: {e}")
         raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
+
+
+@cli.command("why")
+@click.argument("query")
+@click.option("-l", "--limit", default=8, help="Results the search returns")
+@click.option(
+    "-c", "--category",
+    type=click.Choice([c.value for c in MemoryCategory], case_sensitive=False),
+    default=None,
+    help="Filter by category"
+)
+@click.option("-p", "--project", default=None, help="Filter by project")
+@click.option("--min-score", type=float, default=0.0, help="Minimum combined score")
+@click.pass_context
+def why(
+    ctx: click.Context,
+    query: str,
+    limit: int,
+    category: Optional[str],
+    project: Optional[str],
+    min_score: float,
+) -> None:
+    """Show why a search returns what it does.
+
+    Runs the search without recording anything, then lists each result with
+    the signals behind its score, followed by the candidates it left out and
+    the stage that left each one out.
+
+    Example:
+        mem why "how do I run the tests?" -p my-project
+    """
+    engine = get_engine()
+    cat = MemoryCategory(category) if category else None
+
+    try:
+        ranking = run_async(engine.explain(
+            query=query, limit=limit, category=cat, project=project, min_score=min_score,
+        ))
+        config = engine.retriever.config
+        model = config.outcome_model
+        now = datetime.now(UTC)
+
+        def record(memory: Memory) -> tuple[float, float]:
+            if model is None:
+                return memory.worked, memory.failed
+            return model.evidence(memory, now)
+
+        returned = {r.memory.id for r in ranking.results}
+        left_out = [
+            (r.memory, _why_left_out(r.memory.id, ranking), r.semantic_score)
+            for r in ranking.scored
+            if r.memory.id not in returned
+        ]
+
+        if ctx.obj.get("json_output"):
+            click.echo(json.dumps({
+                "search_mode": engine.search_mode,
+                "results": [
+                    {**r.to_dict(), "worked": record(r.memory)[0], "failed": record(r.memory)[1]}
+                    for r in ranking.results
+                ],
+                "left_out": [
+                    {"memory_id": m.id, "reason": reason, "semantic_score": semantic}
+                    for m, reason, semantic in left_out
+                ] + [
+                    {"memory_id": m.id, "reason": "gated", "worked": record(m)[0], "failed": record(m)[1]}
+                    for m in ranking.gated
+                ],
+            }, indent=2, default=str))
+            return
+
+        pool = "off" if config.relevance_pool_factor is None else f"{config.relevance_pool_factor:g} x limit"
+        gate = "off" if config.failure_gate is None or model is None or not config.outcome_weight else f"{config.failure_gate:g}"
+        click.echo(f"Search: {engine.search_mode}. Pool: {pool}. Failure gate: {gate}.")
+        click.echo(
+            f"Score = {config.semantic_weight:g} semantic + {config.outcome_weight:g} outcome + "
+            f"{config.recency_weight:g} recency + {config.confidence_weight:g} confidence"
+            + (f" + {config.frequency_weight:g} frequency" if config.frequency_weight else "")
+        )
+        if not ranking.results:
+            click.echo("\nNo results.")
+        else:
+            click.echo(f"\n{'#':>2}  {'score':>5}  {'semantic':>8}  {'outcome':>7}  {'record':>9}  {'recency':>7}  {'conf':>4}")
+        for rank, r in enumerate(ranking.results, start=1):
+            worked, failed = record(r.memory)
+            click.echo(
+                f"{rank:>2}  {r.score:5.3f}  {r.semantic_score:8.3f}  {r.outcome_signal:+7.2f}  "
+                f"{f'{worked:.0f}w {failed:.0f}f':>9}  {r.recency_score:7.2f}  {r.memory.confidence:4.2f}"
+            )
+            click.echo(f"    [{r.memory.id[:8]}] {r.memory.content[:90]}")
+        if left_out or ranking.gated:
+            click.echo("\nLeft out:")
+        for m, reason, semantic in left_out:
+            click.echo(f"  [{m.id[:8]}] {reason} (semantic {semantic:.3f}): {m.content[:70]}")
+        for m in ranking.gated:
+            worked, failed = record(m)
+            click.echo(f"  [{m.id[:8]}] failure gate ({worked:.0f} worked, {failed:.0f} failed): {m.content[:70]}")
+    except Exception as e:
+        logger.error(f"Explain failed: {e}")
+        raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
+
+
+def _why_left_out(memory_id: str, ranking: Ranking) -> str:
+    """The stage of a ranking that left a scored memory out of the results."""
+    if memory_id in ranking.outside_pool:
+        return "outside the relevance pool"
+    if memory_id in ranking.below_min_score:
+        return "below the minimum score"
+    if memory_id in ranking.duplicates:
+        return "near-duplicate of a better result"
+    return "past the result limit"
 
 
 @cli.command("show")
@@ -728,10 +849,21 @@ def show_stats(ctx: click.Context, project: Optional[str]) -> None:
     try:
         stats = run_async(engine.stats(project=project))
         storage = stats.storage_stats
+        evidence = _outcome_evidence(engine, project)
+        trace_path = _trace_path()
+        trace = None
+        if trace_path is not None and trace_path.exists():
+            from runtime_memory.hermes.trace import summarize
+            trace = summarize(trace_path)
 
         if ctx.obj.get("json_output"):
             from dataclasses import asdict
-            click.echo(json.dumps(asdict(stats), indent=2, default=str))
+            click.echo(json.dumps({
+                **asdict(stats),
+                "search_mode": engine.search_mode,
+                "outcome_evidence": evidence,
+                "trace": {"path": str(trace_path), **trace} if trace else None,
+            }, indent=2, default=str))
         else:
             click.echo("Runtime Memory Statistics")
             click.echo("=" * 40)
@@ -741,14 +873,70 @@ def show_stats(ctx: click.Context, project: Optional[str]) -> None:
             click.echo(f"Average outcome score: {storage.avg_outcome_score:.2f}")
             click.echo(f"Total uses: {storage.total_uses}")
             click.echo(f"Indexed in retriever: {stats.indexed_memories}")
+            click.echo(f"Search: {engine.search_mode}")
+            click.echo()
+            with_outcomes, gated = evidence["with_outcomes"], evidence["gated"]
+            click.echo(
+                f"Outcomes: {with_outcomes} {'memory has' if with_outcomes == 1 else 'memories have'} "
+                f"a record, {evidence['worked']:.1f} worked and {evidence['failed']:.1f} failed in total; "
+                f"{gated} {'is' if gated == 1 else 'are'} left out of retrieval by the failure gate"
+            )
             click.echo()
             if storage.by_category:
                 click.echo("By Category:")
                 for cat, count in storage.by_category.items():
                     click.echo(f"  {cat}: {count}")
+            if trace:
+                click.echo()
+                click.echo(f"Hermes trace ({trace_path}):")
+                modes = ", ".join(f"{n} {mode}" for mode, n in trace["recalls_by_search_mode"].items())
+                click.echo(
+                    f"  Recalls: {trace['recalls']} ({modes or 'none'}), "
+                    f"{trace['mean_block_chars']:.0f} characters injected on average"
+                )
+                for origin, counts in trace["outcomes_by_origin"].items():
+                    click.echo(
+                        f"  Outcomes from {origin}: {counts['events']} events, "
+                        f"{counts['memories']} memories"
+                    )
+                for model, used in trace["extraction_usage"].items():
+                    click.echo(
+                        f"  Extraction with {model}: {used['calls']} calls, "
+                        f"{used['input_tokens']} input and {used['output_tokens']} output tokens"
+                    )
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         raise click.ClickException(format_error(e, ctx.obj.get("verbose", 0) > 0))
+
+
+def _outcome_evidence(engine: Any, project: str | None) -> dict[str, Any]:
+    """Outcome records across the store: how many, how much, how many gated."""
+    memories = run_async(engine.list(project=project, limit=1_000_000))
+    config = engine.retriever.config
+    model = config.outcome_model
+    gate = config.failure_gate if model is not None and config.outcome_weight > 0 else None
+    now = datetime.now(UTC)
+    gated = 0
+    if gate is not None:
+        gated = sum(model.score(*model.evidence(m, now)) <= gate for m in memories)
+    return {
+        "with_outcomes": sum(1 for m in memories if m.worked or m.failed),
+        "worked": sum(m.worked for m in memories),
+        "failed": sum(m.failed for m in memories),
+        "gated": gated,
+    }
+
+
+def _trace_path() -> Path | None:
+    """The Hermes trace file the provider writes, as it resolves it."""
+    from runtime_memory.hermes.trace import TRACE_ENV_VAR, TRACE_FILE_NAME
+
+    configured = os.environ.get(TRACE_ENV_VAR, "").strip()
+    if configured.lower() in {"off", "none", "false", "0"}:
+        return None
+    if configured:
+        return Path(configured).expanduser()
+    return Path(resolve_db_path()).expanduser().parent / TRACE_FILE_NAME
 
 
 @cli.command("check")

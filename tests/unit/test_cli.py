@@ -17,10 +17,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
-from runtime_memory.cli.main import cli
+from runtime_memory.cli.main import cli, get_engine
 from runtime_memory.core.models import (
     ContextResponse,
     Memory,
@@ -30,6 +31,7 @@ from runtime_memory.core.models import (
     SearchResult,
 )
 from runtime_memory.core.engine import EngineStats
+from runtime_memory.core.retrieval import Ranking, RetrievalConfig
 from runtime_memory.core.storage import StorageStats
 
 
@@ -105,6 +107,8 @@ def mock_engine(sample_memory, sample_memories):
         for i, m in enumerate(sample_memories)
     ])
     engine.list = AsyncMock(return_value=all_memories)
+    engine.retriever.config = RetrievalConfig()
+    engine.search_mode = "hybrid"
     engine.delete = AsyncMock(return_value=True)
     engine.record_outcome = AsyncMock(return_value=True)
     engine.get_context = AsyncMock(return_value=ContextResponse(
@@ -752,6 +756,35 @@ class TestTrackFileCommand:
 class TestStatsCommand:
     """Tests for the stats command."""
 
+    def test_stats_reports_outcome_evidence(self, runner, mock_engine, sample_memories):
+        sample_memories[0].worked = 3.0
+        sample_memories[1].failed = 2.0
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
+            result = runner.invoke(cli, ["stats"])
+
+        assert result.exit_code == 0, result.output
+        assert "Search: hybrid" in result.output
+        assert "2 memories have a record, 3.0 worked and 2.0 failed" in result.output
+        assert "1 is left out of retrieval by the failure gate" in result.output
+
+    def test_stats_summarises_the_hermes_trace(self, runner, mock_engine, tmp_path, monkeypatch):
+        trace = tmp_path / "trace.jsonl"
+        trace.write_text("\n".join(json.dumps(r) for r in [
+            {"event": "recall", "search_mode": "hybrid", "block_chars": 300},
+            {"event": "recall", "search_mode": "keyword", "block_chars": 100},
+            {"event": "outcome", "origin": "cited", "memory_ids": ["a", "b"]},
+            {"event": "usage", "model": "claude-sonnet-5", "calls": 1,
+             "input_tokens": 2000, "output_tokens": 700},
+        ]))
+        monkeypatch.setenv("RUNTIME_MEMORY_HERMES_TRACE", str(trace))
+        with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
+            result = runner.invoke(cli, ["stats"])
+
+        assert result.exit_code == 0, result.output
+        assert "Recalls: 2 (1 hybrid, 1 keyword), 200 characters injected on average" in result.output
+        assert "Outcomes from cited: 1 events, 2 memories" in result.output
+        assert "Extraction with claude-sonnet-5: 1 calls, 2000 input and 700 output tokens" in result.output
+
     def test_stats_basic(self, runner, mock_engine):
         """Test basic stats."""
         with patch("runtime_memory.cli.main.get_engine", return_value=mock_engine):
@@ -1025,3 +1058,71 @@ class TestResolveDbPath:
         monkeypatch.setenv("RUNTIME_MEMORY_DB", "/tmp/short.db")
         monkeypatch.setenv("RUNTIME_MEMORY_DATABASE__PATH", "/tmp/nested.db")
         assert resolve_db_path() == "/tmp/short.db"
+
+
+class TestWhyCommand:
+    """mem why lists results with their signals and says why the rest were left out."""
+
+    @staticmethod
+    def engine_with(ranking):
+        engine = MagicMock()
+        engine.explain = AsyncMock(return_value=ranking)
+        engine.retriever.config = RetrievalConfig()
+        engine.search_mode = "hybrid"
+        return engine
+
+    @staticmethod
+    def ranking():
+        returned = Memory(content="Run the tests with make test", category=MemoryCategory.COMMAND)
+        outside = Memory(content="Pin versions in the lockfile", category=MemoryCategory.CONVENTION)
+        gated = Memory(content="Run the tests with python3 -m pytest", category=MemoryCategory.COMMAND, failed=2.0)
+        return Ranking(
+            results=[SearchResult(memory=returned, score=0.8, semantic_score=1.0)],
+            scored=[
+                SearchResult(memory=returned, score=0.8, semantic_score=1.0),
+                SearchResult(memory=outside, score=0.4, semantic_score=0.1),
+            ],
+            gated=[gated],
+            outside_pool={outside.id},
+        ), returned, outside, gated
+
+    def test_lists_results_and_reasons(self, runner):
+        ranking, returned, outside, gated = self.ranking()
+        with patch("runtime_memory.cli.main.get_engine", return_value=self.engine_with(ranking)):
+            result = runner.invoke(cli, ["why", "how do I run the tests?"])
+
+        assert result.exit_code == 0, result.output
+        assert "Search: hybrid" in result.output
+        assert returned.id[:8] in result.output
+        assert f"[{outside.id[:8]}] outside the relevance pool" in result.output
+        assert f"[{gated.id[:8]}] failure gate (0 worked, 2 failed)" in result.output
+
+    def test_json_output(self, runner):
+        ranking, returned, outside, gated = self.ranking()
+        with patch("runtime_memory.cli.main.get_engine", return_value=self.engine_with(ranking)):
+            result = runner.invoke(cli, ["--json-output", "why", "tests"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert [r["memory"]["id"] for r in data["results"]] == [returned.id]
+        assert {(x["memory_id"], x["reason"]) for x in data["left_out"]} == {
+            (outside.id, "outside the relevance pool"),
+            (gated.id, "gated"),
+        }
+
+
+def test_the_engine_is_closed_when_a_command_ends(runner):
+    """Its pooled connections keep non-daemon threads alive, and exit waits for them."""
+    engine = MagicMock()
+    engine.initialize = AsyncMock()
+    engine.close = AsyncMock()
+
+    @click.command()
+    def probe():
+        get_engine()
+
+    with patch("runtime_memory.core.engine.MemoryEngine", return_value=engine):
+        result = runner.invoke(probe)
+
+    assert result.exit_code == 0, result.output
+    engine.close.assert_awaited_once()

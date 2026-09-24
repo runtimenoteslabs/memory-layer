@@ -421,6 +421,10 @@ class SearchResult:
     category_boost: float = 1.0
     """Category-specific boost factor."""
 
+    outcome_signal: float = 0.0
+    """The outcome value, -1 to 1, that the score used: from the decayed counts
+    under an outcome model, or the stored score under 3.x scoring."""
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation.
 
@@ -434,6 +438,7 @@ class SearchResult:
             "recency_score": self.recency_score,
             "frequency_score": self.frequency_score,
             "category_boost": self.category_boost,
+            "outcome_signal": self.outcome_signal,
         }
 
 

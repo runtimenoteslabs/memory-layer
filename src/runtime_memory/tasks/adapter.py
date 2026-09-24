@@ -286,6 +286,21 @@ class BeadsAdapter:
         self._ensure_initialized()
         return await self._outcome_capture.on_task_blocked(task_id)
 
+    async def check_and_record(self, task_id: str) -> int:
+        """Record the outcome a task's current status calls for, if any.
+
+        Done records "worked", cancelled "failed" (when enabled), blocked
+        "partial"; any other status records nothing.
+
+        Args:
+            task_id: The Beads task ID.
+
+        Returns:
+            Number of memories that had outcomes recorded.
+        """
+        self._ensure_initialized()
+        return await self._outcome_capture.check_and_record(task_id)
+
     async def sync(self) -> BeadsSyncResult:
         """Sync outcomes for all completed tasks.
 
@@ -458,6 +473,9 @@ class NullBeadsAdapter:
         return 0
 
     async def on_task_blocked(self, task_id: str) -> int:
+        return 0
+
+    async def check_and_record(self, task_id: str) -> int:
         return 0
 
     async def sync(self) -> BeadsSyncResult:
