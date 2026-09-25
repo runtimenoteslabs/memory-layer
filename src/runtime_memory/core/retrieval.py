@@ -563,6 +563,7 @@ class HybridRetriever:
         project: str | None = None,
         include_archived: bool = False,
         min_score: float = 0.0,
+        semantic: bool = True,
     ) -> list[SearchResult]:
         """Search for relevant memories.
 
@@ -573,6 +574,8 @@ class HybridRetriever:
             project: Filter by project.
             include_archived: Whether to include archived memories.
             min_score: Minimum score threshold.
+            semantic: Embed the query for vector similarity. False scores on
+                keywords alone, without touching the embedding model.
 
         Returns:
             List of search results sorted by relevance.
@@ -584,6 +587,7 @@ class HybridRetriever:
             project=project,
             include_archived=include_archived,
             min_score=min_score,
+            semantic=semantic,
         )
         return ranking.results
 
@@ -595,6 +599,7 @@ class HybridRetriever:
         project: str | None = None,
         include_archived: bool = False,
         min_score: float = 0.0,
+        semantic: bool = True,
     ) -> Ranking:
         """Run a search and keep what each stage did, for explaining it.
 
@@ -608,6 +613,8 @@ class HybridRetriever:
             project: Filter by project.
             include_archived: Whether to include archived memories.
             min_score: Minimum score threshold.
+            semantic: Embed the query. False scores on keywords alone, as a store
+                without an embedding backend does.
 
         Returns:
             The ranking, stage by stage.
@@ -617,9 +624,11 @@ class HybridRetriever:
 
         limit = min(limit or self.config.default_limit, self.config.max_limit)
 
-        # Get query embedding
-        query_result = await self.embedding_provider.embed(query)
-        query_embedding = query_result.embedding
+        # A query without an embedding is scored on keywords alone.
+        query_embedding: EmbeddingVector = []
+        if semantic:
+            query_result = await self.embedding_provider.embed(query)
+            query_embedding = query_result.embedding
 
         # Get candidate memories with filters
         candidates = self._get_candidates(

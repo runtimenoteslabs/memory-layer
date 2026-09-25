@@ -2,7 +2,7 @@
 
 All notable changes to Runtime Memory will be documented in this file.
 
-## [Unreleased] - 4.0.0
+## [4.0.0] - 2026-09-26
 
 Retrieval decides on relevance first. An outcome has to name the memories it is
 about, and each memory keeps a record of how often it worked and failed.
@@ -208,6 +208,21 @@ their logs; each entry states the evidence behind it.
   `'ThinkingBlock' object has no attribute 'text'`. The conflict classifier went
   through the same call. The answer is now read from the text blocks, and a
   refusal is reported as a failed extraction.
+- **Hermes dropped every recall that had to load the embedding model.** The
+  first embedding in a new process loads the model, which takes 14 to 15
+  seconds, and Hermes stops waiting for a provider's prefetch after 8. The
+  model loaded on the provider's event loop, so every search waited behind it,
+  and in one-shot sessions (`hermes -z`) the agent got no memories at all. The
+  model now loads on its own thread when the provider starts, and until it is
+  ready a recall searches by keyword. The trace marks such a recall with
+  `model_loading`. `MemoryEngine.search` and `HybridRetriever.search` take
+  `semantic=False` for a keyword-only search, and embedding providers have
+  `loaded` and `load()`.
+- **Extraction ran out of output on long sessions.** Thinking counts against
+  `max_tokens`, and at 4,096 four of eleven extractions of Tier 3 sessions
+  returned cut-off JSON and stored nothing. `ExtractionConfig.max_tokens` is now
+  16,000, and the Hermes provider waits up to 360 seconds for extraction instead
+  of 180.
 
 ### Migration
 

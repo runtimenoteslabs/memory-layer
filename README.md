@@ -4,20 +4,32 @@ Persistent memory for AI coding agents with outcome-based learning.
 
 > **New to Runtime Memory?** See the [User Guide](https://github.com/runtimenoteslabs/memory-layer/blob/main/USER_GUIDE.md) for an introduction to using Runtime Memory with Claude Code.
 
-## What It Does
+## What it does
 
 Runtime Memory stores knowledge from your coding sessions and records how often each memory worked and how often it failed. Among the memories relevant to a query, those with a better record rank higher. A memory that keeps failing is left out of retrieval until its failures fade.
 
 ## Installation
 
 ```bash
-pip install runtime-memory
+pip install "runtime-memory[all]"
 ```
+
+The base package stores and searches memories by keyword. Each extra adds a part:
+
+| Extra | Adds | Without it |
+|-------|------|------------|
+| `embedding` | Semantic search, with `sentence-transformers` | Search is keyword-only |
+| `extraction` | Extracting memories from sessions with Claude | No extraction |
+| `server` | The MCP server, the REST API and the web UI | `mem serve` is unavailable |
+| `all` | All three | |
+
+`mem stats` shows which search mode is in use. With `embedding`, the first search
+downloads an embedding model of about 100 MB and caches it.
 
 Or from source:
 
 ```bash
-pip install git+https://github.com/runtimenoteslabs/memory-layer.git
+pip install "runtime-memory[all] @ git+https://github.com/runtimenoteslabs/memory-layer.git"
 ```
 
 For development:
@@ -33,9 +45,7 @@ repository is still named memory-layer, which is where the project started; the
 package was renamed in 3.0. An unrelated package holds `memory-layer` on PyPI,
 so `pip install memory-layer` fetches that one instead of this project.
 
-**Note:** First run downloads an embedding model (~100MB) for semantic search. This happens once and is cached. Subsequent operations are fast (<100ms).
-
-## Quick Start
+## Quick start
 
 ### Python SDK
 
@@ -59,7 +69,7 @@ async with MemoryClient() as client:
     context = await client.get_context()
 ```
 
-### Synchronous Client
+### Synchronous client
 
 ```python
 from runtime_memory.sdk import SyncMemoryClient
@@ -114,7 +124,7 @@ curl -X POST http://localhost:8080/memories/search \
   -d '{"query": "testing"}'
 ```
 
-### MCP Server
+### MCP server
 
 For multi-agent setups, Runtime Memory provides an MCP server:
 
@@ -133,7 +143,7 @@ Configure in your MCP client:
 }
 ```
 
-#### Multi-Agent Configurations
+#### Multi-agent configurations
 
 All agents share the same memory store. Memories created in Claude Code appear in Cursor, feedback from OpenCode improves results everywhere.
 
@@ -173,14 +183,14 @@ All agents share the same memory store. Memories created in Claude Code appear i
 }
 ```
 
-### Claude Code Integration
+### Claude Code integration
 
 Runtime Memory integrates with Claude Code via hooks and skills. For a beginner-friendly walkthrough, see the [User Guide](https://github.com/runtimenoteslabs/memory-layer/blob/main/USER_GUIDE.md).
 
 **Installation:**
 
 ```bash
-pip install runtime-memory
+pip install "runtime-memory[all]"
 
 # Go to your project directory
 cd your-project
@@ -219,7 +229,7 @@ The `mem install-plugin` command creates:
 /memory-context                  # Get project context
 ```
 
-### Task Integration (Beads + Claude Code)
+### Task integration (Beads and Claude Code)
 
 Runtime Memory integrates with task trackers to automatically learn from task outcomes.
 
@@ -230,7 +240,7 @@ Runtime Memory integrates with task trackers to automatically learn from task ou
 **How it works:**
 1. You work on a task, Claude searches for relevant memories
 2. Those memories get linked to your task
-3. When you mark the task done, linked memories are automatically boosted
+3. When you mark the task done, the linked memories are recorded as having worked
 
 ```bash
 # Unified task commands (all sources)
@@ -247,24 +257,26 @@ mem beads-context
 mem beads-stats
 ```
 
-No setup required - Runtime Memory auto-detects both `.beads/` and `~/.claude/todos/` directories.
+Runtime Memory finds `.beads/` and `~/.claude/todos/` itself; there is nothing to configure.
 
 **Environment variables:**
 - `CLAUDE_CODE_TASK_LIST_ID` - Filter to specific task list
 - `CLAUDE_CODE_TODOS_DIR` - Custom todos directory location
 
-### Hermes Agent Integration
+### Hermes Agent integration
 
 Runtime Memory can serve as Hermes Agent's memory provider, replacing its capped
 note file with retrieval over the same store Claude Code and MCP clients use.
 
 ```bash
 # Install into the environment Hermes runs in
-~/.hermes/hermes-agent/venv/bin/python -m pip install \
-    git+https://github.com/runtimenoteslabs/memory-layer.git
+~/.hermes/hermes-agent/venv/bin/python -m pip install "runtime-memory[embedding,extraction]"
 
 hermes config set memory.provider runtimememory
 ```
+
+Without the `embedding` extra in Hermes' own environment, the provider searches by
+keyword only and logs a warning that names the interpreter.
 
 Hermes finds the provider through the `hermes_agent.memory_providers` entry
 point, so you do not edit its code or config files by hand. See
@@ -291,9 +303,9 @@ mem serve --rest --port 8080
 - Record outcomes
 - Light/dark theme
 
-## Memory Categories
+## Memory categories
 
-| Category | Use For | Example |
+| Category | Use for | Example |
 |----------|---------|---------|
 | `architecture` | System design | "Microservices with event sourcing" |
 | `convention` | Coding standards | "Use snake_case for Python" |
@@ -305,9 +317,9 @@ mem serve --rest --port 8080
 | `command` | Useful commands | "npm run test:coverage" |
 | `preference` | User preferences | "Prefer functional style" |
 
-## Outcome Scoring
+## Outcome scoring
 
-| Outcome | Adds | When to Use |
+| Outcome | Adds | When to use |
 |---------|------|-------------|
 | `worked` | one success | Advice solved the problem |
 | `failed` | one failure | Advice was wrong or unhelpful |
@@ -316,8 +328,8 @@ mem serve --rest --port 8080
 A memory's outcome score is `(worked - 1.5 x failed) / (worked + 1.5 x failed + 2)`,
 between -1 and 1. One success gives 0.33 and ten give 0.83, so a single
 observation counts for less than a long record. A failure weighs 1.5 successes,
-because bad advice wastes debugging time and erodes trust. Each count halves
-every 90 days.
+because following bad advice wastes debugging time. Each count halves every 90
+days.
 
 Retrieval leaves out a memory whose score is -0.5 or lower, which takes two
 failures and no successes. One failure is not enough, because it may have been
@@ -327,14 +339,14 @@ have faded.
 To change these values, see `RetrievalConfig.outcome_model` and
 `RetrievalConfig.failure_gate`.
 
-## How Retrieval Works
+## How retrieval works
 
 Retrieval runs in two stages. Relevance to your query decides which memories
 compete, then the other signals order them.
 
 **Stage 1, the relevance pool.** A search keeps the `ceil(limit x 2)` memories
-most relevant to the query and drops any with no relevance at all. A memory that
-does not match your query is not returned, however good its record.
+most relevant to the query and drops any with no relevance at all. Outcome records
+reorder only the memories that match the query.
 
 **Stage 2, the score.**
 
@@ -384,25 +396,29 @@ After 12 weeks of use:
 
 ## Configuration
 
-### Environment Variables
+### Environment variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ANTHROPIC_API_KEY` | For LLM-based extraction | Required for extraction features |
-| `MEMORY_LAYER_DB` | Database location | `~/.runtime-memory/memories.db` |
-| `MEMORY_LAYER_ENV` | Environment (development/testing/production) | development |
-| `MEMORY_LAYER_LOG_LEVEL` | Logging level | WARNING |
+| `RUNTIME_MEMORY_DB` | Database location, read by the CLI, the MCP server and the Hermes provider | `~/.runtime-memory/memories.db` |
+| `RUNTIME_MEMORY_ENV` | Environment (development/testing/production) | development |
+| `RUNTIME_MEMORY_LOG_LEVEL` | Logging level | WARNING |
 | `CLAUDE_CODE_TASK_LIST_ID` | Filter Claude Code tasks | None |
 | `CLAUDE_CODE_TODOS_DIR` | Custom todos directory | `~/.claude/todos/` |
 
-### Data Location
+Variables set with the pre-3.0 prefix `MEMORY_LAYER_` are still read, under their
+`RUNTIME_MEMORY_` names. The Hermes provider's own settings are in
+[docs/hermes.md](https://github.com/runtimenoteslabs/memory-layer/blob/main/docs/hermes.md).
+
+### Data location
 
 ```
 ~/.runtime-memory/
 └── memories.db    # SQLite database
 ```
 
-## Project Structure
+## Project structure
 
 ```
 memory-layer/

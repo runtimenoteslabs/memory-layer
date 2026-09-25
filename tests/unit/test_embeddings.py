@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -400,6 +402,38 @@ class TestLocalEmbeddingProvider:
             provider = LocalEmbeddingProvider()
             with pytest.raises(ModelNotFoundError):
                 provider._load_model()
+
+    def test_the_model_loads_once_whichever_thread_asks(self) -> None:
+        """load() on a background thread and an embed on another share one model."""
+        built = []
+
+        class SlowModel:
+            def __init__(self, name):
+                time.sleep(0.2)
+                built.append(name)
+
+            def get_sentence_embedding_dimension(self):
+                return 384
+
+        fake = MagicMock(SentenceTransformer=SlowModel)
+        with patch.dict("sys.modules", {"sentence_transformers": fake}):
+            provider = LocalEmbeddingProvider()
+            assert provider.loaded is False
+
+            threads = [threading.Thread(target=provider.load) for _ in range(3)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        assert provider.loaded is True
+        assert len(built) == 1
+        assert provider.dimensions == 384
+
+    def test_other_providers_have_nothing_to_load(self) -> None:
+        provider = MockEmbeddingProvider()
+        provider.load()
+        assert provider.loaded is True
 
     async def test_model_name(self) -> None:
         """Test model name property."""

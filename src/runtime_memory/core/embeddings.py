@@ -14,6 +14,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -310,6 +311,23 @@ class EmbeddingProvider(ABC):
         return True
 
     @property
+    def loaded(self) -> bool:
+        """Whether embedding a text now would be quick.
+
+        A provider backed by a local model is not loaded until the model is in
+        memory, which takes seconds. A caller on a deadline can search by keyword
+        until it is.
+        """
+        return True
+
+    def load(self) -> None:
+        """Do any slow one-time setup now, such as loading a model.
+
+        Safe to call from a background thread. Most providers have nothing to do.
+        """
+        return None
+
+    @property
     @abstractmethod
     def model_name(self) -> str:
         """Get the model name."""
@@ -536,32 +554,46 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         self._model: Any = None
         self._model_name: str = self.config.model_name
         self._dimensions: int | None = None
+        self._load_lock = threading.Lock()
+
+    @property
+    def loaded(self) -> bool:
+        """Whether the model is in memory."""
+        return self._model is not None
+
+    def load(self) -> None:
+        """Load the model now, for calling on a background thread."""
+        self._load_model()
 
     def _load_model(self) -> Any:
-        """Load the sentence-transformers model."""
+        """Load the sentence-transformers model, once, whichever thread asks first."""
         if self._model is not None:
             return self._model
 
-        try:
-            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-        except ImportError as e:
-            raise ModelNotFoundError(
-                "sentence-transformers not installed. "
-                "Install with: pip install 'runtime-memory[phase1]'"
-            ) from e
+        with self._load_lock:
+            if self._model is not None:
+                return self._model
 
-        try:
-            self._model = SentenceTransformer(self._model_name)
-            # Get model dimensions
-            self._dimensions = self._model.get_sentence_embedding_dimension()
-            logger.info(
-                f"Loaded model {self._model_name} with {self._dimensions} dimensions"
-            )
-            return self._model
-        except Exception as e:
-            raise ModelNotFoundError(
-                f"Failed to load model {self._model_name}: {e}"
-            ) from e
+            try:
+                from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+            except ImportError as e:
+                raise ModelNotFoundError(
+                    "sentence-transformers not installed. "
+                    "Install with: pip install 'runtime-memory[embedding]'"
+                ) from e
+
+            try:
+                model = SentenceTransformer(self._model_name)
+                self._dimensions = model.get_sentence_embedding_dimension()
+                self._model = model
+                logger.info(
+                    f"Loaded model {self._model_name} with {self._dimensions} dimensions"
+                )
+                return self._model
+            except Exception as e:
+                raise ModelNotFoundError(
+                    f"Failed to load model {self._model_name}: {e}"
+                ) from e
 
     @property
     def model_name(self) -> str:

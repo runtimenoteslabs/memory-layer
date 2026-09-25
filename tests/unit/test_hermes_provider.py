@@ -14,6 +14,7 @@ import importlib.util
 import json
 import logging
 import sys
+import threading
 import time
 import tomllib
 from pathlib import Path
@@ -22,6 +23,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from runtime_memory.core.attribution import Attribution
+from runtime_memory.core.embeddings import MockEmbeddingProvider
 from runtime_memory.core.models import Outcome, RelationType
 from runtime_memory.extraction.extractor import ExtractionResult, MemoryExtractor, ModelUsage
 from runtime_memory.hermes import RuntimeMemoryProvider, register
@@ -421,6 +423,78 @@ class TestRecall:
         recalls = [r for r in records if r["event"] == "recall"]
         assert len(recalls) == 1
         assert recalls[0]["retrieved"] == []
+
+    def test_recall_searches_by_keyword_while_the_model_loads(self, tmp_path, monkeypatch):
+        """A recall does not wait for the model: Hermes stops waiting after 8 seconds."""
+        trace_path = tmp_path / "trace.jsonl"
+        monkeypatch.setenv(TRACE_ENV_VAR, str(trace_path))
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "loading.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-loading", agent_context="primary")
+        try:
+            _call(
+                instance,
+                "runtimememory_remember",
+                content="Run the ledger tests with .venv/bin/python -m pytest",
+                category="command",
+            )
+            monkeypatch.setattr(MockEmbeddingProvider, "loaded", property(lambda _self: False))
+
+            async def refuse(_text):
+                raise AssertionError("recall waited for the model")
+
+            monkeypatch.setattr(instance._engine.embedding_provider, "embed", refuse)
+            block = instance.prefetch("how do I run the ledger tests?")
+        finally:
+            instance.shutdown()
+
+        assert "pytest" in block
+        recall = next(
+            json.loads(line)
+            for line in trace_path.read_text().splitlines()
+            if json.loads(line)["event"] == "recall"
+        )
+        assert recall["search_mode"] == "keyword"
+        assert recall["model_loading"] is True
+
+    def test_a_loaded_model_is_used(self, tmp_path, monkeypatch):
+        trace_path = tmp_path / "trace.jsonl"
+        monkeypatch.setenv(TRACE_ENV_VAR, str(trace_path))
+        monkeypatch.setenv("RUNTIME_MEMORY_DB", str(tmp_path / "loaded.db"))
+        monkeypatch.setenv("RUNTIME_MEMORY_EMBEDDING", "mock")
+
+        instance = RuntimeMemoryProvider()
+        instance.initialize("session-loaded", agent_context="primary")
+        try:
+            _call(instance, "runtimememory_remember", content="A useful fact", category="general")
+            instance.prefetch("tell me the fact")
+        finally:
+            instance.shutdown()
+
+        recall = next(
+            json.loads(line)
+            for line in trace_path.read_text().splitlines()
+            if json.loads(line)["event"] == "recall"
+        )
+        assert (recall["search_mode"], recall["model_loading"]) == ("hybrid", False)
+
+    def test_the_model_loads_on_its_own_thread(self, provider, monkeypatch):
+        called = threading.Event()
+        loaded_on = []
+
+        def load():
+            loaded_on.append(threading.current_thread().name)
+            called.set()
+
+        monkeypatch.setattr(MockEmbeddingProvider, "loaded", property(lambda _self: False))
+        monkeypatch.setattr(provider._engine.embedding_provider, "load", load)
+
+        provider._start_model_load()
+
+        assert called.wait(timeout=5)
+        assert loaded_on == ["runtime-memory-model"]
 
     def test_recall_survives_engine_failure(self, provider, monkeypatch):
         """A broken search costs the recall, never the turn."""

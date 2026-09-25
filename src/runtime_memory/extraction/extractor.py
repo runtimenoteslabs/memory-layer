@@ -397,8 +397,14 @@ class ExtractionConfig:
     a generation behind and will eventually retire.
     """
 
-    max_tokens: int = 4096
-    """Maximum tokens in response."""
+    max_tokens: int = 16000
+    """Maximum tokens in the response, thinking included.
+
+    Claude 5 models think by default, and thinking counts against this limit. At
+    4,096, four of eleven extraction calls on Tier 3 sessions of 27,000 to 48,600
+    input tokens ran out on 2026-09-24 and returned cut-off JSON, which stores
+    nothing. 16,000 stays under the length at which the SDK requires streaming.
+    """
 
     temperature: float = 0.1
     """Ignored since the move to Claude 5.

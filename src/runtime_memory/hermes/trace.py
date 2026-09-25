@@ -86,6 +86,7 @@ class TraceWriter:
         counterparts: list[str] | None = None,
         contradicts: dict[str, list[str]] | None = None,
         block_chars: int = 0,
+        model_loading: bool = False,
     ) -> None:
         """Record what a recall injected.
 
@@ -105,6 +106,8 @@ class TraceWriter:
             block_chars: Length of the injected block, which the agent's model
                 reads on every call it makes in the turn. Characters, because
                 that model's tokenizer is not Runtime Memory's to know.
+            model_loading: The embedding model was still loading, so this recall
+                searched by keyword although the store searches in hybrid mode.
         """
         self._write(
             {
@@ -114,6 +117,7 @@ class TraceWriter:
                 "query": query,
                 "project": project,
                 "search_mode": search_mode,
+                "model_loading": model_loading,
                 "latency_ms": round(latency_ms, 2),
                 "retrieved": [
                     {

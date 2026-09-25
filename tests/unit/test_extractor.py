@@ -32,7 +32,7 @@ class TestExtractionConfig:
         """Test default configuration values."""
         config = ExtractionConfig()
         assert config.model == "claude-sonnet-5"
-        assert config.max_tokens == 4096
+        assert config.max_tokens == 16000
         assert config.temperature == 0.1
         assert config.rate_limit_rpm == 50
         assert config.enable_pii_filtering is True

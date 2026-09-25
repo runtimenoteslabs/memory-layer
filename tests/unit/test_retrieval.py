@@ -941,6 +941,24 @@ class TestSemanticScoreWithoutVectors:
         assert hit_score > miss_score
 
 
+class TestKeywordOnlySearch:
+    """A caller that cannot wait for the model searches on keywords alone."""
+
+    async def test_the_query_is_not_embedded(self, retriever: HybridRetriever) -> None:
+        hit = create_memory("clear the pytest cache when tests fail randomly")
+        miss = create_memory("use snake_case for python identifiers")
+        for memory in (hit, miss):
+            retriever.add_memory(memory, [0.1] * 384)
+
+        async def refuse(_text):
+            raise AssertionError("the query was embedded")
+
+        retriever.embedding_provider.embed = refuse
+        results = await retriever.search("pytest cache", limit=2, semantic=False)
+
+        assert results[0].memory.id == hit.id
+
+
 class TestRelevancePool:
     """Two-stage retrieval: relevance picks the pool, the full score picks from it.
 

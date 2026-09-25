@@ -1,27 +1,26 @@
-# Runtime Memory - User Guide
+# Runtime Memory user guide
 
-A simple guide for using Runtime Memory with Claude Code and other AI coding assistants.
+How to use Runtime Memory with Claude Code and other AI coding assistants.
 
 ---
 
-## What It Does
+## What it does
 
-Runtime Memory gives Claude Code (and other AI coding assistants) a persistent memory. Instead of forgetting everything when you close a session, Claude remembers:
+Runtime Memory gives Claude Code and other AI coding assistants a memory that lasts
+between sessions. It keeps:
 
 - Your project conventions ("we use tabs, not spaces")
 - Past decisions ("we chose PostgreSQL because...")
 - Gotchas ("the CI server needs Node 18, not 20")
-- What advice actually helped you
-
-Over time, it learns which memories are actually useful based on your feedback.
+- How often each memory's advice worked and how often it failed, from your feedback
 
 ---
 
-## Setup (One Time)
+## Setup
 
 ```bash
-# 1. Install
-pip install runtime-memory
+# 1. Install, with semantic search, extraction and the MCP server
+pip install "runtime-memory[all]"
 
 # 2. Go to your project
 cd your-project
@@ -33,22 +32,23 @@ mem install-plugin
 claude
 ```
 
-That's it. Runtime Memory now works automatically.
+From the next session on, Claude Code loads relevant memories when it starts.
 
 ---
 
-## Daily Usage
+## Daily use
 
-### The Basics
+### What happens on its own
 
-**You don't need to do anything special.** Claude will:
-- Automatically load relevant memories at session start
-- Remember things from your conversations
-- Learn which advice actually helped
+The plugin's hooks run without any action from you:
+- At session start, relevant memories are loaded into the session.
+- Before Claude Code compacts its context, extraction stores what the session learned.
+  Extraction needs `ANTHROPIC_API_KEY`.
+- At session end, a summary of the session is generated.
 
-### When You Want to Explicitly Remember Something
+### Storing something on purpose
 
-Just tell Claude naturally:
+Tell Claude:
 
 > "Remember that we always run tests before committing"
 
@@ -64,9 +64,9 @@ With a category:
 /remember category:gotcha The staging server resets every night at 2am
 ```
 
-### When You Want to Find Past Knowledge
+### Finding past knowledge
 
-Ask Claude naturally:
+Ask Claude:
 
 > "What's our convention for error handling?"
 
@@ -77,9 +77,9 @@ Or use the slash command:
 /recall database setup
 ```
 
-### Giving Feedback
+### Giving feedback
 
-When Claude's advice helps (or doesn't), tell it:
+When Claude's advice works or fails, tell it:
 
 > "Thanks, that worked!"
 
@@ -87,11 +87,12 @@ When Claude's advice helps (or doesn't), tell it:
 
 > "That partially helped, but I also needed to restart the server"
 
-This helps Claude learn which memories are actually useful. Good advice gets boosted, bad advice gets penalized.
+Claude records the outcome against the memories the advice came from. Among the
+memories relevant to a query, those with a better record rank higher.
 
 ---
 
-## Available Slash Commands
+## Slash commands
 
 Use these directly in Claude Code:
 
@@ -108,9 +109,9 @@ Use these directly in Claude Code:
 
 ---
 
-## Terminal Commands (Optional)
+## Terminal commands
 
-Most users never need these, but they're available if you prefer the command line:
+The same operations are available from the terminal:
 
 ```bash
 # See all memories
@@ -125,8 +126,11 @@ mem add "Always use async/await" -c convention
 # Get project summary
 mem context
 
-# View statistics
+# View statistics, including the search mode in use
 mem stats
+
+# See why a search returns what it does
+mem why "keyword"
 
 # Give feedback
 mem outcome <id> worked
@@ -134,7 +138,7 @@ mem outcome <id> worked
 
 ---
 
-## Memory Categories
+## Memory categories
 
 When storing memories, you can specify a category to help organize them:
 
@@ -153,35 +157,33 @@ When storing memories, you can specify a category to help organize them:
 
 ---
 
-## Tips for Best Results
+## Tips
 
-### 1. Be Specific
+### Be specific
 
 **Good:** "Use async/await for all database calls in this project"
 
 **Less useful:** "use async"
 
-### 2. Include the Why
+### Include the reason
 
 **Good:** "We use PostgreSQL because we need ACID transactions for payment processing"
 
 **Less useful:** "We use PostgreSQL"
 
-### 3. Give Feedback
+### Give feedback
 
-The more you say "that worked!" or "that didn't help", the smarter the system gets. It takes just a second and makes a real difference.
+Each "that worked" or "that didn't help" records an outcome. Without feedback,
+memories rank on relevance, extraction confidence and age alone.
 
-### 4. Don't Worry About Perfect Organization
+### Categories are optional
 
-You don't need to categorize everything perfectly. The search is smart enough to find relevant memories even if they're in different categories.
-
-### 5. It Works Across Sessions
-
-Close Claude, come back tomorrow, next week, or next month - your memories are still there. That's the whole point!
+Search matches on content, so a memory filed under an unexpected category is still
+found.
 
 ---
 
-## How It Works (For the Curious)
+## How it works
 
 1. **Storage**: Memories are stored locally in a SQLite database (`~/.runtime-memory/memories.db`)
 
@@ -191,7 +193,7 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
    - Recency (recent memories weighted higher)
    - Extraction confidence
 
-3. **Relevance first**: A search keeps the memories most relevant to your query and drops the rest, then ranks those on outcome, confidence and age. A memory that does not match your query is not returned, whatever its record.
+3. **Relevance first**: A search keeps the memories most relevant to your query and drops the rest, then ranks those on outcome, confidence and age. Outcome records reorder only the memories that match the query.
 
 4. **Learning**: Each memory counts how often it worked and how often it failed
    - "worked" adds a success
@@ -203,55 +205,42 @@ Close Claude, come back tomorrow, next week, or next month - your memories are s
    rank higher. A memory that failed twice with no successes is left out of
    retrieval until its failures fade; each count halves every 90 days.
 
-5. **Privacy**: Everything stays on your machine. No data is sent anywhere.
+5. **Privacy**: Memories are stored only on your machine. Extraction, when enabled, sends session transcripts to Anthropic's API.
 
 ---
 
-## First-Time Performance
+## The first run
 
-The first time you use Runtime Memory, a few things happen that may make it seem slow:
+With the `embedding` extra, the first search downloads a sentence embedding model of
+about 100 MB and caches it, so that search takes longer than later ones. Without the
+extra, search is keyword-only; `mem stats` shows which mode is in use.
 
-1. **Embedding model download** (~100MB): On first search, the system downloads a sentence embedding model for semantic search. This happens once and is cached.
-
-2. **Database creation**: The SQLite database is created on first use at `~/.runtime-memory/memories.db`.
-
-3. **Index building**: As you add memories, they get indexed for fast retrieval.
-
-**What to expect:**
-- First run: 5-30 seconds (model download)
-- Subsequent operations: <100ms
-
-If the first run seems stuck, it's likely downloading the embedding model. You can verify with:
+The SQLite database is created on first use at `~/.runtime-memory/memories.db`. To
+check the database and the engine:
 ```bash
 mem check
 ```
 
 ---
 
-## Task Integration
+## Task integration
 
 Runtime Memory integrates with task trackers to automatically learn from task outcomes.
 
-### Supported Task Sources
+### Supported task sources
 
 | Source | Location | Auto-detected |
 |--------|----------|---------------|
 | [Beads](https://github.com/steveyegge/beads) | `.beads/` in project | Yes |
 | Claude Code Tasks | `~/.claude/todos/` | Yes |
 
-### How It Works
+### How tasks record outcomes
 
 1. When you work on a task, Claude searches for relevant memories
 2. Those memories get linked to your task
-3. When you mark the task as done, the memories that helped are automatically boosted
+3. When you mark the task as done, the linked memories are recorded as having worked
 
-```
-Task completed
-    → Memories used during this task are credited with a success
-    → Good advice rises to the top over time
-```
-
-### Unified Task Commands
+### Task commands
 
 ```bash
 # List tasks from all sources
@@ -271,7 +260,7 @@ mem tasks-context
 mem tasks-stats
 ```
 
-### Legacy Beads Commands (Still Supported)
+### Beads commands, still supported
 
 ```bash
 mem beads-sync
@@ -280,15 +269,15 @@ mem beads-stats
 mem beads-link <memory_id>
 ```
 
-### What Gets Recorded
+### What gets recorded
 
-| Task Status | Memory Outcome | Adds |
+| Task status | Memory outcome | Adds |
 |-------------|----------------|------|
 | completed/done | worked | one success |
 | cancelled | failed (if enabled) | one failure |
 | blocked | partial | a quarter of a success |
 
-### Environment Variables
+### Environment variables
 
 | Variable | Description |
 |----------|-------------|
@@ -301,7 +290,7 @@ mem beads-link <memory_id>
 
 Runtime Memory includes a web interface for browsing and managing memories.
 
-### Starting the Web UI
+### Starting the web UI
 
 ```bash
 # Start the server
@@ -353,7 +342,7 @@ rm ~/.runtime-memory/memories.db
 
 ---
 
-## Getting Help
+## Getting help
 
 - Report issues: https://github.com/runtimenoteslabs/memory-layer/issues
 - See all CLI options: `mem --help`

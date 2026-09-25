@@ -670,6 +670,7 @@ class MemoryEngine:
         include_archived: bool = False,
         min_score: float = 0.0,
         track_usage: bool = True,
+        semantic: bool = True,
     ) -> _List[SearchResult]:
         """Search for relevant memories.
 
@@ -684,6 +685,8 @@ class MemoryEngine:
             include_archived: Whether to include archived memories.
             min_score: Minimum relevance score threshold.
             track_usage: Whether to increment use counts for returned memories.
+            semantic: Embed the query for vector similarity. False searches on
+                keywords alone, for a caller that cannot wait for the model.
 
         Returns:
             List of SearchResults sorted by relevance.
@@ -698,6 +701,7 @@ class MemoryEngine:
             project=project,
             include_archived=include_archived,
             min_score=min_score,
+            semantic=semantic,
         )
 
         # Track last search if enabled

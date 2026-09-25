@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
@@ -65,8 +66,12 @@ DEFAULT_RECALL_LIMIT = 8
 DEFAULT_CONFLICT_COUNTERPARTS = 3
 """Stored memories shown beside the recall because they contradict one in it."""
 DEFAULT_MIN_SCORE = 0.0
-EXTRACTION_TIMEOUT = 180.0
-"""Seconds to wait for session-end extraction. It is one LLM round trip."""
+EXTRACTION_TIMEOUT = 360.0
+"""Seconds to wait for session-end extraction, one LLM round trip.
+
+Room for the extraction call's full output, 16,000 tokens with thinking, at about
+50 tokens a second.
+"""
 
 _WRITE_CONTEXTS = frozenset({"primary", ""})
 """Agent contexts allowed to write. Subagents, cron and flush runs read only."""
@@ -251,10 +256,7 @@ class RuntimeMemoryProvider(MemoryProvider):
         run_sync(engine.initialize(), timeout=120.0)
         self._engine = engine
 
-        # Pull the embedding model into memory now. It costs ~20s on first load,
-        # and paying that here rather than inside the user's first turn is the
-        # difference between a slow start and a stalled reply.
-        spawn(self._warm(), label="warmup")
+        self._start_model_load()
 
         logger.info(
             f"Runtime Memory ready (db={self._db_path}, project={self._project}, "
@@ -275,10 +277,28 @@ class RuntimeMemoryProvider(MemoryProvider):
                 "choose keyword matching and silence this."
             )
 
-    async def _warm(self) -> None:
-        """Touch the retrieval path once so the first real query is fast."""
-        if self._engine is not None:
-            await self._engine.search("warmup", limit=1, track_usage=False)
+    def _start_model_load(self) -> None:
+        """Load the embedding model on a thread of its own.
+
+        The first embedding in a new process loads the model, which took 14 to 15
+        seconds in Hermes' environment on 2026-09-24. Hermes gives a provider's
+        prefetch 8 seconds and then skips it. Loaded on the event loop, as it used
+        to be, the model held up every search behind it, and in one-shot sessions
+        every recall missed the window. Loaded here, it leaves the loop free, and
+        ``prefetch`` searches by keyword until it is ready.
+        """
+        embedder = self._require_engine().embedding_provider
+        if embedder.available and not embedder.loaded:
+            threading.Thread(
+                target=self._load_model, name="runtime-memory-model", daemon=True
+            ).start()
+
+    def _load_model(self) -> None:
+        """Thread body: load the model, logging rather than raising a failure."""
+        try:
+            self._require_engine().embedding_provider.load()
+        except Exception as exc:  # keyword search carries on without it
+            logger.warning(f"Embedding model failed to load; recall stays keyword-only: {exc}")
 
     def shutdown(self) -> None:
         """Close the engine. The shared event loop deliberately stays up."""
@@ -335,6 +355,11 @@ class RuntimeMemoryProvider(MemoryProvider):
         if self._engine is None or is_trivial_prompt(query):
             return ""
 
+        # Search by keyword while the model is still loading: see
+        # _start_model_load. A recall with memories found by keyword is worth
+        # more than one that arrives after Hermes has stopped waiting.
+        embedder = self._engine.embedding_provider
+        loading = embedder.available and not embedder.loaded
         started = time.perf_counter()
         try:
             results = run_sync(
@@ -343,6 +368,7 @@ class RuntimeMemoryProvider(MemoryProvider):
                     limit=self._recall_limit,
                     project=self._project,
                     min_score=self._min_score,
+                    semantic=not loading,
                 ),
                 timeout=15.0,
             )
@@ -367,7 +393,8 @@ class RuntimeMemoryProvider(MemoryProvider):
             results=results,
             project=self._project,
             latency_ms=(time.perf_counter() - started) * 1000,
-            search_mode=self._engine.search_mode,
+            search_mode="keyword" if loading else self._engine.search_mode,
+            model_loading=loading,
             counterparts=[m.id for m in counterparts],
             contradicts=contradicts,
             block_chars=len(block),

@@ -43,9 +43,12 @@ add the embedding extra:
 
 Without the extra, retrieval uses only the BM25 half of the hybrid, and the
 provider logs a warning at startup naming the interpreter to install into. With
-it, the embedding model loads at startup rather than during your first turn. The
-startup line reports which you got, `search=hybrid` or `search=keyword`, and so
-does every recall in the evaluation trace.
+it, the embedding model starts loading on its own thread when the provider starts,
+which takes about 15 seconds. Hermes waits 8 seconds for a recall, so until the
+model is ready a recall searches by keyword instead of making the turn wait. In a
+one-shot session (`hermes -z`) that is usually the first recall. The startup line
+reports which search you have, `search=hybrid` or `search=keyword`, and every
+recall in the evaluation trace reports which it used.
 
 If the Hermes environment already holds memories embedded by a different model,
 keep using that model. Mixing embedding models in one store leaves the older
@@ -191,7 +194,8 @@ per turn, which memories were injected and whether they helped.
  "memory_ids": ["9a9f"], "origin": "tool"}
 ```
 
-A recall also records its `search_mode` (`hybrid` or `keyword`), any
+A recall also records its `search_mode` (`hybrid` or `keyword`), `model_loading`
+when it searched by keyword because the model had not loaded yet, any
 `counterparts` added below it, the `contradicts` marks shown, and `block_chars`,
 the length of the injected block in characters. The block is sent with every
 model call in the turn, so its length is what memory adds to the agent's input.
