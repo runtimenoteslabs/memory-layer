@@ -28,8 +28,9 @@ from runtime_memory.extraction.extractor import (
 class TestExtractionConfig:
     """Tests for ExtractionConfig."""
 
-    def test_default_config(self) -> None:
+    def test_default_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test default configuration values."""
+        monkeypatch.delenv("RUNTIME_MEMORY_EXTRACTION_MODEL", raising=False)
         config = ExtractionConfig()
         assert config.model == "claude-sonnet-5"
         assert config.max_tokens == 16000
@@ -50,6 +51,66 @@ class TestExtractionConfig:
         assert config.min_confidence == 0.5
         assert config.min_importance == 0.4
         assert config.enable_pii_filtering is False
+
+
+class TestExtractionModelFromEnvironment:
+    """RUNTIME_MEMORY_EXTRACTION_MODEL picks the model for every default config."""
+
+    def test_environment_sets_the_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACTION_MODEL", "claude-haiku-5-5")
+
+        assert ExtractionConfig().model == "claude-haiku-5-5"
+
+    def test_extractor_without_a_config_uses_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Hermes provider and the Claude Code daemon build MemoryExtractor()."""
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACTION_MODEL", "claude-haiku-5-5")
+
+        extractor = MemoryExtractor()
+
+        assert extractor.config.model == "claude-haiku-5-5"
+        assert extractor._usage.model == "claude-haiku-5-5"
+
+    def test_blank_value_keeps_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACTION_MODEL", "  ")
+
+        assert ExtractionConfig().model == "claude-sonnet-5"
+
+    def test_explicit_model_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACTION_MODEL", "claude-haiku-5-5")
+
+        assert ExtractionConfig(model="claude-sonnet-5").model == "claude-sonnet-5"
+
+    def test_read_when_the_config_is_made(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A long-running daemon picks up a changed value for its next extraction."""
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACTION_MODEL", "claude-haiku-5-5")
+        first = ExtractionConfig()
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACTION_MODEL", "claude-sonnet-5")
+
+        assert first.model == "claude-haiku-5-5"
+        assert ExtractionConfig().model == "claude-sonnet-5"
+
+    @pytest.mark.asyncio
+    async def test_api_call_uses_the_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RUNTIME_MEMORY_EXTRACTION_MODEL", "claude-haiku-5-5")
+        extractor = MemoryExtractor(api_key="test")
+        response = MagicMock(
+            stop_reason="end_turn",
+            content=[MagicMock(type="text", text='{"memories": [], "summary": ""}')],
+            usage=MagicMock(input_tokens=10, output_tokens=5),
+        )
+        client = MagicMock()
+        client.messages.create = AsyncMock(return_value=response)
+        extractor._client = client
+        # Over min_transcript_length (100 characters), so the call is made.
+        transcript = (
+            "user: Run the tests for the ledger package.\n"
+            "assistant: python3 -m pytest failed with No module named pytest, "
+            "so I ran .venv/bin/python -m pytest instead and all 12 tests passed."
+        )
+
+        await extractor.extract_from_transcript(transcript)
+
+        assert client.messages.create.await_args.kwargs["model"] == "claude-haiku-5-5"
 
 
 class TestExtractedMemory:

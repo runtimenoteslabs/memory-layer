@@ -241,6 +241,17 @@ class TestDefaultStore:
         assert instance._db_path == tmp_path / ".runtime-memory" / "memories.db"
 
 
+class TestExtractionModelSetting:
+    """`hermes memory setup` offers the extraction model as an environment variable."""
+
+    def test_config_schema_offers_the_extraction_model(self, provider):
+        schema = {field["key"]: field for field in provider.get_config_schema()}
+
+        assert schema["extraction_model"]["env_var"] == "RUNTIME_MEMORY_EXTRACTION_MODEL"
+        assert schema["extraction_model"]["default"] == "claude-sonnet-5"
+        assert schema["extraction_model"]["type"] == "text"
+
+
 class TestEmbeddingBackend:
     """The store is shared, so a missing model must not turn into fake vectors."""
 

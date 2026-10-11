@@ -70,6 +70,7 @@ beyond the provider name.
 | `RUNTIME_MEMORY_PROJECT` | workspace name | Project scope for memories |
 | `RUNTIME_MEMORY_MIRROR_WRITES` | `true` | Mirror built-in memory writes |
 | `RUNTIME_MEMORY_EXTRACT_ON_END` | `false` | Extract memories at session end |
+| `RUNTIME_MEMORY_EXTRACTION_MODEL` | `claude-sonnet-5` | Claude model for extraction, see How memories are written |
 | `RUNTIME_MEMORY_SESSION_OUTCOMES` | `true` | Record the session's test verdict at session end, see Outcome feedback |
 | `RUNTIME_MEMORY_ASK_CITATIONS` | `true` | Ask the agent to name the memories it uses |
 | `RUNTIME_MEMORY_HERMES_TRACE` | `hermes-trace.jsonl` beside the store | Path for the trace, or `off` |
@@ -115,6 +116,18 @@ which would bury the curated memories that retrieval depends on.
   finished session. The call is shown the project's stored memories, skips what
   they already say, counts the ones the session confirmed, and records which
   stored memory each new one updates, contradicts, or extends.
+
+  `RUNTIME_MEMORY_EXTRACTION_MODEL` picks the model. Extraction reads the whole
+  session, so it can cost more than the agent calls its memories save. Replaying
+  the 27 sessions of the Tier 3 Hermes evaluation through 4.0, extraction cost
+  $1.66 on `claude-sonnet-5` and $0.10 on `claude-haiku-5-5`, against $0.24 of
+  `deepseek-v4-pro` calls saved. Every store Haiku 5.5 wrote kept the note that
+  saved the most calls. The replay held the agent's work fixed, so Sonnet 5 stays
+  the default until a live run confirms Haiku's notes save as much:
+
+  ```bash
+  export RUNTIME_MEMORY_EXTRACTION_MODEL=claude-haiku-5-5
+  ```
 
 Subagent, cron, and flush contexts read the store but never write to it, so
 background runs cannot fill it with duplicates.

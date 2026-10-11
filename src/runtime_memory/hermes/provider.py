@@ -862,6 +862,11 @@ class RuntimeMemoryProvider(MemoryProvider):
 
     def get_config_schema(self) -> list[dict[str, Any]]:
         """Fields offered by ``hermes memory setup``."""
+        from runtime_memory.extraction.extractor import (  # noqa: PLC0415
+            DEFAULT_EXTRACTION_MODEL,
+            EXTRACTION_MODEL_ENV,
+        )
+
         return [
             {
                 "key": "db_path",
@@ -892,6 +897,13 @@ class RuntimeMemoryProvider(MemoryProvider):
                 "default": False,
                 "env_var": "RUNTIME_MEMORY_EXTRACT_ON_END",
                 "type": "boolean",
+            },
+            {
+                "key": "extraction_model",
+                "description": "Claude model for session-end extraction",
+                "default": DEFAULT_EXTRACTION_MODEL,
+                "env_var": EXTRACTION_MODEL_ENV,
+                "type": "text",
             },
         ]
 

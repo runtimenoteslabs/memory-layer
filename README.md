@@ -401,6 +401,7 @@ After 12 weeks of use:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ANTHROPIC_API_KEY` | For LLM-based extraction | Required for extraction features |
+| `RUNTIME_MEMORY_EXTRACTION_MODEL` | Claude model for extraction | `claude-sonnet-5`; `claude-haiku-5-5` costs about a seventeenth as much |
 | `RUNTIME_MEMORY_DB` | Database location, read by the CLI, the MCP server and the Hermes provider | `~/.runtime-memory/memories.db` |
 | `RUNTIME_MEMORY_ENV` | Environment (development/testing/production) | development |
 | `RUNTIME_MEMORY_LOG_LEVEL` | Logging level | WARNING |

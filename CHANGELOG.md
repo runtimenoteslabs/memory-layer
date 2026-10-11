@@ -2,6 +2,20 @@
 
 All notable changes to Runtime Memory will be documented in this file.
 
+## [4.0.1] - 2026-10-11
+
+### Added
+
+- **`RUNTIME_MEMORY_EXTRACTION_MODEL` picks the extraction model.** Every
+  integration that builds an extractor without its own config reads it: the
+  Hermes provider, the Claude Code daemon and the CLI. `hermes memory setup`
+  offers it as `extraction_model`. Blank or unset keeps `claude-sonnet-5`. Until
+  now the model could only be changed in code. Replaying the 27 sessions of the
+  Tier 3 Hermes evaluation, extraction cost $1.66 on `claude-sonnet-5` and $0.10
+  on `claude-haiku-5-5`, against $0.24 of agent model calls the memories saved,
+  and every Haiku 5.5 store kept the note that saved the most calls. The default
+  stays Sonnet 5 until a live run confirms Haiku's notes save as much.
+
 ## [4.0.0] - 2026-09-26
 
 Retrieval decides on relevance first. An outcome has to name the memories it is

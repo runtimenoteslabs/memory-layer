@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field, replace
@@ -384,17 +385,35 @@ class ExtractionResult:
         return len(self.memories)
 
 
+DEFAULT_EXTRACTION_MODEL = "claude-sonnet-5"
+EXTRACTION_MODEL_ENV = "RUNTIME_MEMORY_EXTRACTION_MODEL"
+
+
+def default_extraction_model() -> str:
+    """The extraction model: ``RUNTIME_MEMORY_EXTRACTION_MODEL``, or Sonnet 5.
+
+    Read when a config is created, so one setting reaches every integration
+    that builds an extractor without a config of its own: the Hermes provider,
+    the Claude Code daemon and the CLI.
+    """
+    return os.environ.get(EXTRACTION_MODEL_ENV, "").strip() or DEFAULT_EXTRACTION_MODEL
+
+
 @dataclass
 class ExtractionConfig:
     """Configuration for the extraction pipeline."""
 
     # LLM settings
-    model: str = "claude-sonnet-5"
-    """Model to use for extraction.
+    model: str = field(default_factory=default_extraction_model)
+    """Model to use for extraction, from ``RUNTIME_MEMORY_EXTRACTION_MODEL``.
 
     Extraction is a bulk structured-output task, so it runs on a cheaper model
     than a reasoning workload would. Claude 4.x ids still resolve today but are
-    a generation behind and will eventually retire.
+    a generation behind and will eventually retire. Replaying the 27 sessions
+    of the Tier 3 Hermes evaluation, ``claude-haiku-5-5`` cost $0.10 against
+    $1.66 on ``claude-sonnet-5``, and every store it wrote kept the note that
+    saved the agent the most calls. Sonnet 5 stays the default until a live run
+    confirms Haiku's notes work as well.
     """
 
     max_tokens: int = 16000
